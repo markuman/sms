@@ -1,0 +1,7 @@
+# This is used to generate install_requires in setup.py and so not
+# pinning to strict versions. CircleCI also converts '>=' to '=='
+# to run tests on the earliest versions
+
+flask>=2.0.0
+gevent>=21.8.0
+protobuf>=4.21.1

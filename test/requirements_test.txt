@@ -1,0 +1,5 @@
+# No pinning since this is used for multiple Python versions
+
+coverage
+pre-commit
+pytest
