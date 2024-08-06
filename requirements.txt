@@ -5,3 +5,4 @@
 flask>=2.0.0
 gevent>=21.8.0
 protobuf>=4.21.1
+httpx

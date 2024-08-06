@@ -32,7 +32,7 @@ from werkzeug.middleware.proxy_fix import (
 from .glyphs_pb2 import glyphs
 
 
-def mbtiles_s3_server(
+def simple_mbtiles_server(
         logger,
         exit_stack,
         port,
@@ -438,7 +438,7 @@ def main():
     env = normalise_environment(os.environ)
 
     with ExitStack() as exit_stack:
-        start, stop = mbtiles_s3_server(
+        start, stop = simple_mbtiles_server(
             logger,
             exit_stack,
             int(os.environ['PORT']),
