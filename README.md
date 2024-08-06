@@ -3,14 +3,31 @@
 Based on https://github.com/uktrade/mbtiles-s3-server, but without S3 dependencies.
 
 
-## Installation
+## Install Entire Planet
 
-```bash
-pip install git+https://github.com/markuman/sms
+For mbtiles generation and hosting, donations are welcome :)
+  * paypal.me/MarkusBergholz
+  * bc1qz33cf70vq82gxf8kps06j7lv7m2903hsnjak6k
+
+```
+mkdir osm
+wget -O planet.mbtiles https://hidrive.ionos.com/api/sharelink/download?id=SYEgScrRe
+podman run -ti --rm -p 9000:9000 --name sms -v $(pwd)/osm/:/data/ localhost/sms:latest
+firefox http://localhost:9000
 ```
 
-The libsqlite3 binary library is also required, but this is typically already installed on most systems. The earliest version of libsqlite3 known to work is 2012-12-12 (3.7.15).
+### nextcloud GpxPod
 
+1. Deploy the container/service behind a webproxy (_caddy, nginx, traefik,...you name it._) to get a valid SSL version.
+2. Goto GpxPod Settings -> Tile Servers
+  * Type: Vector
+  * Server address: `https://<YOUR_SMS_SERVICE_DEPLOYMENT>/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0`
+
+
+## HELP WANTED
+
+* Improve Style for Nextcloud GxpPod
+* Add contour lines
 
 ## Example usage
 
