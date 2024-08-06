@@ -23,6 +23,7 @@ from flask import (
     Flask,
     Response,
     request,
+    send_from_directory,
 )
 import httpx
 from werkzeug.middleware.proxy_fix import (
@@ -323,11 +324,16 @@ def simple_mbtiles_server(
         return Response(status=200, content_type=static_dict['mime'],
                         response=static_dict['bytes'])
 
+    def get_index():
+        return send_from_directory(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'vendor'), 'index.html')
+
     @app.after_request
     def _add_headers(resp):
         if http_access_control_allow_origin:
             resp.headers['access-control-allow-origin'] = http_access_control_allow_origin
         return resp
+
+    app.add_url_rule('/', view_func=get_index)
 
     app.add_url_rule(
         '/v1/tiles/<string:identifier>@<string:version>/<int:z>/<int:x>/<int:y>.mvt',
