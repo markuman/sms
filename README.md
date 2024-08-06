@@ -20,8 +20,8 @@ firefox http://localhost:9000
 
 1. Deploy the container/service behind a webproxy (_caddy, nginx, traefik,...you name it._) to get a valid SSL version.
 2. Goto GpxPod Settings -> Tile Servers
-  * Type: Vector
-  * Server address: `https://<YOUR_SMS_SERVICE_DEPLOYMENT>/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0`
+    * Type: Vector
+    * Server address: `https://<YOUR_SMS_SERVICE_DEPLOYMENT>/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0`
 
 
 ## HELP WANTED
