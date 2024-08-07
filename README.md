@@ -1,13 +1,8 @@
-# simple mbtiles server
+# 🗺️ OSM - self host the entire planet 🌎 in ~30 minutes 🚀
 
-Based on https://github.com/uktrade/mbtiles-s3-server, but without S3 dependencies.
+**s**imple **m**btiles **s**erver
 
-
-## Install Entire Planet
-
-For mbtiles generation and hosting, donations are welcome :)
-  * paypal.me/MarkusBergholz
-  * bc1qz33cf70vq82gxf8kps06j7lv7m2903hsnjak6k
+#### TL;DR
 
 ```
 mkdir osm
@@ -15,6 +10,27 @@ wget -O osm/planet.mbtiles https://hidrive.ionos.com/api/sharelink/download?id=S
 podman run -ti --rm -p 9000:9000 --name sms -v $(pwd)/osm/:/data/ registry.gitlab.com/markuman/sms:latest
 firefox http://localhost:9000
 ```
+
+requirements: 
+* `podman` (_or `docker`_)
+* 90 GB storage is required (_1 core and 512MB memory are sufficient_)
+
+notes:
+* "_~30 minutes_" depends on your bandwidth ...and the hidrive performance of ionos.
+
+# support
+
+* My Project: https://github.com/markuman/sms
+* For the large planet.mbtiles generation and hosting, donations are welcome 🙂
+  * paypal.me/MarkusBergholz
+  * bc1qz33cf70vq82gxf8kps06j7lv7m2903hsnjak6k
+
+
+# credits
+
+* https://github.com/onthegomap/planetiler is used to generate the planet.mbtiles file
+* https://github.com/uktrade/mbtiles-s3-server is the origin code-base of my `sms` project
+
 
 ### nextcloud GpxPod
 
