@@ -18,13 +18,6 @@ requirements:
 notes:
 * "_~30 minutes_" depends on your bandwidth ...and the hidrive performance of ionos.
 
-# support
-
-* My Project: https://github.com/markuman/sms
-* For the large planet.mbtiles generation and hosting, donations are welcome 🙂
-  * paypal.me/MarkusBergholz
-  * bc1qz33cf70vq82gxf8kps06j7lv7m2903hsnjak6k
-
 
 # credits
 
@@ -103,3 +96,10 @@ Hosting your own vector map tiles to show them in a browser requires quite a few
 ## Licenses
 
 The code of the server itself is released under the MIT license. However, several components included in [mbtiles_s3_server/vendor/](./mbtiles_s3_server/vendor/) are released under different licenses.
+
+# support
+
+* My Project: https://github.com/markuman/sms
+* For the large planet.mbtiles generation and hosting, donations are welcome 🙂
+  * paypal.me/MarkusBergholz
+  * bc1qz33cf70vq82gxf8kps06j7lv7m2903hsnjak6k
