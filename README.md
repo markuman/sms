@@ -7,7 +7,7 @@
 ```
 mkdir osm
 wget -O osm/planet.mbtiles https://hidrive.ionos.com/api/sharelink/download?id=SYEgScrRe
-podman run -ti --rm -p 9000:9000 --name sms -v $(pwd)/osm/:/data/ registry.gitlab.com/markuman/sms:latest
+podman run -ti --rm -p 9000:9000 --name sms -v "$(pwd)/osm/:/data/" registry.gitlab.com/markuman/sms:latest
 firefox http://localhost:9000
 ```
 
