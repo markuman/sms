@@ -12,17 +12,36 @@
   </head>
   <body>
     <div id="map"></div>
-    <script>
-    var map = new maplibregl.Map({
-        container: 'map',
-        style: '/v1/styles/osm-liberty@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
-        center: [0, 0],
-        zoom: 1,
-        attributionControl: false
-    });
-    map.addControl(new maplibregl.AttributionControl({
-        customAttribution: '<a href="https://openmaptiles.org/">© OpenMapTiles</a> <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> Served by <a href="https://github.com/markuman/sms">⚡sms🚀</a>'
-    }), 'bottom-right');
-    </script>
+			<script>
+				var map = new maplibregl.Map({
+				    container: 'map',
+				    style: '/v1/styles/osm-liberty@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
+				    center: [0, 0],
+				    zoom: 1,
+				    attributionControl: false
+				});
+				map.addControl(new maplibregl.AttributionControl({
+				    customAttribution: '<a href="https://openmaptiles.org/">© OpenMapTiles</a> <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> Served by <a href="https://github.com/markuman/sms">⚡sms🚀</a>'
+				}, 'bottom-right'));
+
+				// Parameter aus dem URL abrufen
+				function getUrlParams() {
+				  const params = new URLSearchParams(window.location.search);
+				  return {
+				    lat: parseFloat(params.get('lat')) || 0,
+				    lng: parseFloat(params.get('lng')) || 0,
+				    zoom: parseInt(params.get('zoom')) || 1
+				  };
+				}
+
+				// Parameter abrufen und in die Map einfügen
+				const params = getUrlParams();
+				map.on('load', () => { // Wichtig: Nach dem Laden der Map-Ressourcen
+				  map.jumpTo({
+				    center: [params.lng, params.lat],
+				    zoom: params.zoom
+				  });
+				});
+			</script>
   </body>
 </html>
