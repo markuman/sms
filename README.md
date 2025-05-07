@@ -2,7 +2,7 @@
 
 **s**imple **m**btiles **s**erver
 
-#### TL;DR
+#### SETUP - TL;DR
 
 ```
 mkdir osm
@@ -24,13 +24,27 @@ notes:
 * https://github.com/onthegomap/planetiler is used to generate the planet.mbtiles file
 * https://github.com/uktrade/mbtiles-s3-server is the origin code-base of my `sms` project
 
+# Usage
 
-### nextcloud GpxPod
+## nextcloud GpxPod
 
 1. Deploy the container/service behind a webproxy (_caddy, nginx, traefik,...you name it._) to get a valid SSL certificate.
 2. Goto GpxPod Settings -> Tile Servers
     * Type: Vector
     * Server address: `https://<YOUR_SMS_SERVICE_DEPLOYMENT>/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0`
+
+
+## URL Parameter
+
+You can add coordinates and Zoomlevel.
+
+`https://maps.osuv.de/?lat=48.1374&lng=11.5752&zoom=9`
+
+## Reverse Geolocation / Photon Integration
+
+* sms supports [photon](https://github.com/rtuszik/photon-docker) reverse geocoding server.
+
+Just set `-e PHOTONSERVER="https://photon.osuv.de"` for your sms Container.
 
 
 ## HELP WANTED

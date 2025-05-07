@@ -48,72 +48,87 @@
     </div>
     <div id="results"></div>
 			<script>
-        const params = new URLSearchParams(window.location.search);
-        var lat = parseFloat(params.get('lat')) || 0;
-        var lng = parseFloat(params.get('lng')) || 0;
-        var zoom = parseInt(params.get('zoom')) || 1;
-
 				var map = new maplibregl.Map({
 				    container: 'map',
 				    style: '/v1/styles/osm-liberty@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
-				    center: [lat, lng],
-				    zoom: zoom,
+				    center: [0, 0],
+				    zoom: 1,
 				    attributionControl: false
 				});
 				map.addControl(new maplibregl.AttributionControl({
 				    customAttribution: '<a href="https://openmaptiles.org/">© OpenMapTiles</a> <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> Served by <a href="https://github.com/markuman/sms">⚡sms🚀</a>'
 				}, 'bottom-right'));
 
-      // Photon Suche
-      const searchInput = document.getElementById('search');
-      const resultsContainer = document.getElementById('results');
-
-      searchInput.addEventListener('input', function() {
-        const query = this.value.trim();
-        if (query.length < 3) {
-          resultsContainer.style.display = 'none';
-          return;
+        // Parameter aus dem URL abrufen
+        function getUrlParams() {
+          const params = new URLSearchParams(window.location.search);
+          return {
+            lat: parseFloat(params.get('lat')) || 0,
+            lng: parseFloat(params.get('lng')) || 0,
+            zoom: parseInt(params.get('zoom')) || 1
+          };
         }
 
-        fetch('https://photon.osuv.de/api/?q=' + encodeURIComponent(query))
-          .then(response => response.json())
-          .then(data => {
-            resultsContainer.innerHTML = '';
-            if (data.features.length > 0) {
-              data.features.forEach(feature => {
-                const div = document.createElement('div');
-                div.textContent = feature.properties.name + (feature.properties.city ? ', ' + feature.properties.city : '');
-                div.addEventListener('click', () => {
-                  const [lon, lat] = feature.geometry.coordinates;
-                  map.flyTo({
-                    center: [lon, lat],
-                    zoom: 16
-                  });
-                  resultsContainer.style.display = 'none';
-                  searchInput.value = div.textContent;
-                });
-                resultsContainer.appendChild(div);
-              });
-              resultsContainer.style.display = 'block';
-            } else {
-              resultsContainer.style.display = 'none';
-            }
-          })
-          .catch(err => {
-            console.error('Fehler bei der Photon-Suche:', err);
-            resultsContainer.style.display = 'none';
+        // Parameter abrufen und in die Map einfügen
+        const params = getUrlParams();
+        map.on('load', () => { // Wichtig: Nach dem Laden der Map-Ressourcen
+          map.jumpTo({
+            center: [params.lng, params.lat],
+            zoom: params.zoom
           });
-      });
+        });
 
-      searchInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-          const firstResult = resultsContainer.querySelector('div');
-          if (firstResult) {
-            firstResult.click();
-            e.preventDefault();
+
+        // Photon Suche
+        const searchInput = document.getElementById('search');
+        const resultsContainer = document.getElementById('results');
+
+        searchInput.addEventListener('input', function() {
+          const query = this.value.trim();
+          if (query.length < 3) {
+            resultsContainer.style.display = 'none';
+            return;
           }
-        }
-      });
+
+          fetch('PHOTONSERVER/api/?q=' + encodeURIComponent(query))
+            .then(response => response.json())
+            .then(data => {
+              resultsContainer.innerHTML = '';
+              if (data.features.length > 0) {
+                data.features.forEach(feature => {
+                  const div = document.createElement('div');
+                  div.textContent = feature.properties.name + (feature.properties.city ? ', ' + feature.properties.city : '');
+                  div.addEventListener('click', () => {
+                    const [lon, lat] = feature.geometry.coordinates;
+                    map.flyTo({
+                      center: [lon, lat],
+                      zoom: 16
+                    });
+                    resultsContainer.style.display = 'none';
+                    searchInput.value = div.textContent;
+                  });
+                  resultsContainer.appendChild(div);
+                });
+                resultsContainer.style.display = 'block';
+              } else {
+                resultsContainer.style.display = 'none';
+              }
+            })
+            .catch(err => {
+              console.error('Fehler bei der Photon-Suche:', err);
+              resultsContainer.style.display = 'none';
+            });
+        });
+
+        searchInput.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            const firstResult = resultsContainer.querySelector('div');
+            if (firstResult) {
+              firstResult.click();
+              e.preventDefault();
+            }
+          }
+        });
 			</script>
   </body>
 </html>

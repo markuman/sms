@@ -20,4 +20,6 @@ ENV MBTILES__1__IDENTIFIER=mytiles
 ENV MBTILES__1__VERSION=1.0.0
 ENV HTTP_ACCESS_CONTROL_ALLOW_ORIGIN="*"
 
-CMD python -m simple_mbtiles_server
+COPY startup.sh /sms/startup.sh
+RUN chmod +x /sms/startup.sh
+CMD ["/sms/startup.sh"]
