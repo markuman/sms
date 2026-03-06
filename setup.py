@@ -8,7 +8,7 @@ def contents(file_name):
 
 setuptools.setup(
     name='simple-mbtiles-server',
-    version='1.0.0',
+    version='4.0.0',
     author='markuman',
     author_email='spam@osuv.de',
     description='Server to on-the-fly extract and serve vector tiles from an mbtiles file on fs',

@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <title>Example map</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
-    <script src="/v1/static/maplibre-gl@2.1.9/maplibre-gl.js"></script>
-    <link href="/v1/static/maplibre-gl@2.1.9/maplibre-gl.css" rel="stylesheet">
+    <script src="/v1/static/maplibre-gl@5.19.0/maplibre-gl.js"></script>
+    <link href="/v1/static/maplibre-gl@5.19.0/maplibre-gl.css" rel="stylesheet">
     <style>
       body, html, #map {margin: 0; padding: 0; height: 100%; width: 100%}
-      #searchbox {
+      #toolbar {
         position: absolute;
         top: 10px;
         left: 50%;
@@ -18,6 +18,9 @@
         padding: 5px;
         border-radius: 4px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        gap: 4px;
       }
       #results {
         position: absolute;
@@ -39,16 +42,33 @@
       #results div:hover {
         background: #eee;
       }
+      .toolbar-btn {
+        cursor: pointer;
+        padding: 5px 8px;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        background: #f5f5f5;
+        font-size: 13px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      .toolbar-btn:hover {
+        background: #e8e8e8;
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
-    <div id="searchbox">
+    <div id="toolbar">
       <input type="text" id="search" placeholder="Ort oder Adresse suchen..." style="width: 300px; padding: 5px;">
+      <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
+      <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
     </div>
     <div id="results"></div>
 			<script>
-				var map = new maplibregl.Map({
+				var marker = null;
+
+			var map = new maplibregl.Map({
 				    container: 'map',
 				    style: '/v1/styles/osm-liberty@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
 				    center: [0, 0],
@@ -76,6 +96,9 @@
             center: [params.lng, params.lat],
             zoom: params.zoom
           });
+          if (params.lat !== 0 || params.lng !== 0) {
+            marker = new maplibregl.Marker().setLngLat([params.lng, params.lat]).addTo(map);
+          }
         });
 
 
@@ -104,6 +127,8 @@
                       center: [lon, lat],
                       zoom: 16
                     });
+                    if (marker) marker.remove();
+                    marker = new maplibregl.Marker().setLngLat([lon, lat]).addTo(map);
                     resultsContainer.style.display = 'none';
                     searchInput.value = div.textContent;
                   });
@@ -128,6 +153,40 @@
               e.preventDefault();
             }
           }
+        });
+
+        // GPX Track entfernen
+        document.getElementById('gpx-clear').addEventListener('click', function() {
+          ['gpx-line', 'gpx-casing'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+          if (map.getSource('gpx')) map.removeSource('gpx');
+          document.getElementById('gpx-input').value = '';
+        });
+
+        // GPX laden
+        document.getElementById('gpx-input').addEventListener('change', function(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = function(ev) {
+            const gpx = new DOMParser().parseFromString(ev.target.result, 'application/xml');
+            const coords = [];
+            gpx.querySelectorAll('trkpt').forEach(pt => {
+              coords.push([parseFloat(pt.getAttribute('lon')), parseFloat(pt.getAttribute('lat'))]);
+            });
+            if (!coords.length) return;
+            const geojson = { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
+            if (map.getSource('gpx')) {
+              map.getSource('gpx').setData(geojson);
+            } else {
+              map.addSource('gpx', { type: 'geojson', data: geojson });
+              map.addLayer({ id: 'gpx-casing', type: 'line', source: 'gpx', paint: { 'line-color': '#fff', 'line-width': 5, 'line-opacity': 0.6 } });
+              map.addLayer({ id: 'gpx-line',   type: 'line', source: 'gpx', paint: { 'line-color': '#e74c3c', 'line-width': 3 } });
+            }
+            const lngs = coords.map(c => c[0]);
+            const lats = coords.map(c => c[1]);
+            map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40 });
+          };
+          reader.readAsText(file);
         });
 			</script>
   </body>
