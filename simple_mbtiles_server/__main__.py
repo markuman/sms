@@ -97,12 +97,12 @@ def simple_mbtiles_server(
     }
 
     statics_dict = {
-        ('maplibre-gl', '2.1.9', 'maplibre-gl.css'): {
-            'bytes': read('vendor/maplibre-gl@2.1.9/maplibre-gl.css'),
+        ('maplibre-gl', '5.19.0', 'maplibre-gl.css'): {
+            'bytes': read('vendor/maplibre-gl@5.19.0/maplibre-gl.css'),
             'mime': 'text/css',
         },
-        ('maplibre-gl', '2.1.9', 'maplibre-gl.js'): {
-            'bytes': read('vendor/maplibre-gl@2.1.9/maplibre-gl.js'),
+        ('maplibre-gl', '5.19.0', 'maplibre-gl.js'): {
+            'bytes': read('vendor/maplibre-gl@5.19.0/maplibre-gl.js'),
             'mime': 'application/javascript',
         },
     }
