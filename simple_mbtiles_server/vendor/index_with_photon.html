@@ -48,7 +48,9 @@
     </div>
     <div id="results"></div>
 			<script>
-				var map = new maplibregl.Map({
+				var marker = null;
+
+			var map = new maplibregl.Map({
 				    container: 'map',
 				    style: '/v1/styles/osm-liberty@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
 				    center: [0, 0],
@@ -76,6 +78,9 @@
             center: [params.lng, params.lat],
             zoom: params.zoom
           });
+          if (params.lat !== 0 || params.lng !== 0) {
+            marker = new maplibregl.Marker().setLngLat([params.lng, params.lat]).addTo(map);
+          }
         });
 
 
@@ -104,6 +109,8 @@
                       center: [lon, lat],
                       zoom: 16
                     });
+                    if (marker) marker.remove();
+                    marker = new maplibregl.Marker().setLngLat([lon, lat]).addTo(map);
                     resultsContainer.style.display = 'none';
                     searchInput.value = div.textContent;
                   });
