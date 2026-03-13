@@ -42,11 +42,30 @@
     <div id="toolbar">
       <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
       <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
+      <select id="style-select" class="toolbar-btn">
+        <option value="osm-bright-gl-style" selected>OSM Bright</option>
+        <option value="dark-matter-gl-style">Dark Matter</option>
+        <option value="fiord-color-gl-style">Fiord Color</option>
+        <option value="maptiler-3d-gl-style">MapTiler 3D</option>
+        <option value="maptiler-basic-gl-style">MapTiler Basic</option>
+        <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
+        <option value="maptiler-toner-gl-style">MapTiler Toner</option>
+        <option value="positron-gl-style">Positron</option>
+      </select>
     </div>
 			<script>
-				var map = new maplibregl.Map({
+				var gpxData = null;
+
+			function addGpxLayers() {
+			  if (!gpxData) return;
+			  map.addSource('gpx', { type: 'geojson', data: gpxData });
+			  map.addLayer({ id: 'gpx-casing', type: 'line', source: 'gpx', paint: { 'line-color': '#fff', 'line-width': 5, 'line-opacity': 0.6 } });
+			  map.addLayer({ id: 'gpx-line',   type: 'line', source: 'gpx', paint: { 'line-color': '#e74c3c', 'line-width': 3 } });
+			}
+
+			var map = new maplibregl.Map({
 				    container: 'map',
-				    style: '/v1/styles/osm-liberty@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
+				    style: '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
 				    center: [0, 0],
 				    zoom: 1,
 				    attributionControl: false
@@ -74,11 +93,19 @@
 				  });
 				});
 
+        // Style wechseln
+        document.getElementById('style-select').addEventListener('change', function() {
+          const url = '/v1/styles/' + this.value + '@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0';
+          map.setStyle(url);
+          map.once('style.load', addGpxLayers);
+        });
+
         // GPX Track entfernen
         document.getElementById('gpx-clear').addEventListener('click', function() {
           ['gpx-line', 'gpx-casing'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
           if (map.getSource('gpx')) map.removeSource('gpx');
           document.getElementById('gpx-input').value = '';
+          gpxData = null;
         });
 
         // GPX laden
@@ -93,14 +120,10 @@
               coords.push([parseFloat(pt.getAttribute('lon')), parseFloat(pt.getAttribute('lat'))]);
             });
             if (!coords.length) return;
-            const geojson = { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
-            if (map.getSource('gpx')) {
-              map.getSource('gpx').setData(geojson);
-            } else {
-              map.addSource('gpx', { type: 'geojson', data: geojson });
-              map.addLayer({ id: 'gpx-casing', type: 'line', source: 'gpx', paint: { 'line-color': '#fff', 'line-width': 5, 'line-opacity': 0.6 } });
-              map.addLayer({ id: 'gpx-line',   type: 'line', source: 'gpx', paint: { 'line-color': '#e74c3c', 'line-width': 3 } });
-            }
+            gpxData = { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
+            ['gpx-line', 'gpx-casing'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+            if (map.getSource('gpx')) map.removeSource('gpx');
+            addGpxLayers();
             const lngs = coords.map(c => c[0]);
             const lats = coords.map(c => c[1]);
             map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40 });
