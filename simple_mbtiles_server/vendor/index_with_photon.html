@@ -8,25 +8,51 @@
     <link href="/v1/static/maplibre-gl@5.19.0/maplibre-gl.css" rel="stylesheet">
     <style>
       body, html, #map {margin: 0; padding: 0; height: 100%; width: 100%}
-      #toolbar {
+      #panel {
         position: absolute;
         top: 10px;
-        left: 50%;
-        transform: translateX(-50%);
+        left: 10px;
         z-index: 10;
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      #toolbar-toggle {
+        flex-shrink: 0;
+        width: 36px;
+        height: 36px;
         background: white;
-        padding: 5px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        color: #555;
+        transition: background 0.2s;
+      }
+      #toolbar-toggle:hover { background: #e8e8e8; }
+      #toolbar {
+        background: white;
+        padding: 8px;
         border-radius: 4px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.3);
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
+        transition: opacity 0.2s, transform 0.2s;
+      }
+      #toolbar.hidden {
+        opacity: 0;
+        transform: translateX(-10px);
+        pointer-events: none;
       }
       #results {
         position: absolute;
-        top: 50px;
-        left: 50%;
-        transform: translateX(-50%);
+        top: 56px;
+        left: 52px;
         z-index: 10;
         background: white;
         border-radius: 4px;
@@ -55,69 +81,168 @@
       .toolbar-btn:hover {
         background: #e8e8e8;
       }
+      #contour-toggle {
+        display: none;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 8px;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        background: #f5f5f5;
+        font-size: 13px;
+        cursor: pointer;
+        user-select: none;
+      }
+      #contour-toggle:hover { background: #e8e8e8; }
+      #contour-toggle input[type=checkbox] {
+        appearance: none;
+        width: 32px;
+        height: 17px;
+        background: #ccc;
+        border-radius: 9px;
+        position: relative;
+        cursor: pointer;
+        transition: background 0.2s;
+        flex-shrink: 0;
+      }
+      #contour-toggle input[type=checkbox]::after {
+        content: '';
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        background: white;
+        border-radius: 50%;
+        top: 2px;
+        left: 2px;
+        transition: left 0.2s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      }
+      #contour-toggle input[type=checkbox]:checked { background: #7a5230; }
+      #contour-toggle input[type=checkbox]:checked::after { left: 17px; }
+      #zoom-badge {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: bold;
+        color: #555;
+        pointer-events: none;
+        user-select: none;
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
-    <div id="toolbar">
-      <input type="text" id="search" placeholder="Ort oder Adresse suchen..." style="width: 300px; padding: 5px;">
-      <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
-      <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
-      <select id="style-select" class="toolbar-btn">
-        <option value="osm-bright-gl-style" selected>OSM Bright</option>
-        <option value="dark-matter-gl-style">Dark Matter</option>
-        <option value="fiord-color-gl-style">Fiord Color</option>
-        <option value="maptiler-3d-gl-style">MapTiler 3D</option>
-        <option value="maptiler-basic-gl-style">MapTiler Basic</option>
-        <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
-        <option value="maptiler-toner-gl-style">MapTiler Toner</option>
-        <option value="positron-gl-style">Positron</option>
-      </select>
+    <div id="panel">
+      <button id="toolbar-toggle" title="Werkzeuge ein/ausblenden">⧼</button>
+      <div id="toolbar">
+        <input type="text" id="search" placeholder="Ort oder Adresse suchen..." style="width: 300px; padding: 5px;">
+        <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
+        <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
+        <select id="style-select" class="toolbar-btn">
+          <option value="osm-bright-gl-style" selected>OSM Bright</option>
+          <option value="dark-matter-gl-style">Dark Matter</option>
+          <option value="fiord-color-gl-style">Fiord Color</option>
+          <option value="maptiler-3d-gl-style">MapTiler 3D</option>
+          <option value="maptiler-basic-gl-style">MapTiler Basic</option>
+          <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
+          <option value="maptiler-toner-gl-style">MapTiler Toner</option>
+          <option value="positron-gl-style">Positron</option>
+        </select>
+        <label id="contour-toggle">
+          <input type="checkbox" id="contour-checkbox">
+          Höhenlinien
+        </label>
+        <div id="zoom-badge" title="Aktuelle Zoomstufe">1</div>
+      </div>
     </div>
     <div id="results"></div>
 			<script>
-				var marker = null;
-			var gpxData = null;
+      var marker = null;
+      var gpxData = null;
+      var contoursAvailable = false;
+      var contoursVisible = false;
 
-			function addGpxLayers() {
-			  if (!gpxData) return;
-			  map.addSource('gpx', { type: 'geojson', data: gpxData });
-			  map.addLayer({ id: 'gpx-casing', type: 'line', source: 'gpx', paint: { 'line-color': '#fff', 'line-width': 5, 'line-opacity': 0.6 } });
-			  map.addLayer({ id: 'gpx-line',   type: 'line', source: 'gpx', paint: { 'line-color': '#e74c3c', 'line-width': 3 } });
-			}
-
-			var map = new maplibregl.Map({
-				    container: 'map',
-				    style: '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
-				    center: [0, 0],
-				    zoom: 1,
-				    attributionControl: false
-				});
-				map.addControl(new maplibregl.AttributionControl({
-				    customAttribution: '<a href="https://openmaptiles.org/">© OpenMapTiles</a> <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> Served by <a href="https://github.com/markuman/sms">⚡sms🚀</a>'
-				}, 'bottom-right'));
-
-        // Parameter aus dem URL abrufen
-        function getUrlParams() {
-          const params = new URLSearchParams(window.location.search);
-          return {
-            lat: parseFloat(params.get('lat')) || 0,
-            lng: parseFloat(params.get('lng')) || 0,
-            zoom: parseInt(params.get('zoom')) || 1
-          };
-        }
-
-        // Parameter abrufen und in die Map einfügen
-        const params = getUrlParams();
-        map.on('load', () => { // Wichtig: Nach dem Laden der Map-Ressourcen
-          map.jumpTo({
-            center: [params.lng, params.lat],
-            zoom: params.zoom
-          });
-          if (params.lat !== 0 || params.lng !== 0) {
-            marker = new maplibregl.Marker().setLngLat([params.lng, params.lat]).addTo(map);
-          }
+      function applyContourVisibility() {
+        if (!contoursAvailable) return;
+        const vis = contoursVisible ? 'visible' : 'none';
+        ['contour-line', 'contour-label'].forEach(id => {
+          if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
         });
+      }
+
+      function addGpxLayers() {
+        if (!gpxData) return;
+        map.addSource('gpx', { type: 'geojson', data: gpxData });
+        map.addLayer({ id: 'gpx-casing', type: 'line', source: 'gpx', paint: { 'line-color': '#fff', 'line-width': 5, 'line-opacity': 0.6 } });
+        map.addLayer({ id: 'gpx-line',   type: 'line', source: 'gpx', paint: { 'line-color': '#e74c3c', 'line-width': 3 } });
+      }
+
+      var map = new maplibregl.Map({
+          container: 'map',
+          style: '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
+          center: [0, 0],
+          zoom: 1,
+          attributionControl: false
+      });
+      map.addControl(new maplibregl.AttributionControl({
+          customAttribution: '<a href="https://openmaptiles.org/">© OpenMapTiles</a> <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> Served by <a href="https://github.com/markuman/sms">⚡sms🚀</a>'
+      }, 'bottom-right'));
+
+      // Capabilities laden und Contour-Toggle einblenden falls verfügbar
+      fetch('/v1/capabilities').then(r => r.json()).then(caps => {
+        if (caps.contours) {
+          contoursAvailable = true;
+          document.getElementById('contour-toggle').style.display = 'flex';
+        }
+      });
+
+      // Parameter aus dem URL abrufen
+      function getUrlParams() {
+        const params = new URLSearchParams(window.location.search);
+        return {
+          lat: parseFloat(params.get('lat')) || 0,
+          lng: parseFloat(params.get('lng')) || 0,
+          zoom: parseInt(params.get('zoom')) || 1
+        };
+      }
+
+      // Parameter abrufen und in die Map einfügen
+      const params = getUrlParams();
+      map.on('load', () => {
+        map.jumpTo({
+          center: [params.lng, params.lat],
+          zoom: params.zoom
+        });
+        if (params.lat !== 0 || params.lng !== 0) {
+          marker = new maplibregl.Marker().setLngLat([params.lng, params.lat]).addTo(map);
+        }
+      });
+
+      // Zoom-Badge aktualisieren
+      function updateZoomBadge() {
+        document.getElementById('zoom-badge').textContent = Math.round(map.getZoom());
+      }
+      map.on('zoom', updateZoomBadge);
+      map.on('load', updateZoomBadge);
+
+      // Toolbar-Toggle
+      document.getElementById('toolbar-toggle').addEventListener('click', function() {
+        document.getElementById('toolbar').classList.toggle('hidden');
+        this.textContent = document.getElementById('toolbar').classList.contains('hidden') ? '⧽' : '⧼';
+      });
+
+      // Contour-Toggle
+      document.getElementById('contour-checkbox').addEventListener('change', function() {
+        contoursVisible = this.checked;
+        applyContourVisibility();
+      });
 
 
         // Photon Suche
@@ -173,11 +298,14 @@
           }
         });
 
-        // Style wechseln
+        // Style wechseln — Contour-Sichtbarkeit nach Style-Reload wiederherstellen
         document.getElementById('style-select').addEventListener('change', function() {
           const url = '/v1/styles/' + this.value + '@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0';
           map.setStyle(url);
-          map.once('style.load', addGpxLayers);
+          map.once('style.load', () => {
+            addGpxLayers();
+            applyContourVisibility();
+          });
         });
 
         // GPX Track entfernen
