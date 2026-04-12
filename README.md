@@ -15,6 +15,7 @@ firefox http://localhost:9000
 requirements: 
 * `podman` (_or `docker`_)
 * 100 GB storage is required (_1 core and 512MB memory are sufficient_)
+* optional 315 GB storage is required for contour lines
 
 notes:
 * "_~30 minutes_" depends on your bandwidth ...and the hidrive performance of ionos.
