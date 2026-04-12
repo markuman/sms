@@ -71,6 +71,17 @@ def simple_mbtiles_server(
         for mbtile in mbtiles
     }
 
+    contours_dict = {}
+    if mbtiles:
+        first_mbtiles_url = mbtiles[0].get('URL')
+        if first_mbtiles_url:
+            contours_path = os.path.join(os.path.dirname(first_mbtiles_url), 'contours.mbtiles')
+            if os.path.exists(contours_path):
+                contours_dict = {
+                    'db_connection': sqlite3.connect(contours_path),
+                    'url': contours_path,
+                }
+
     styles_dict = {
         (style_id, style_version): {
             file_name: read(f'vendor/{style_id}@{style_version}/{file_name}')
@@ -133,10 +144,13 @@ def simple_mbtiles_server(
     '''
 
     def get_tile(identifier, version, z, x, y):
-        try:
-            db_connection = mbtiles_dict[(identifier, version)]['db_connection']
-        except KeyError:
-            return Response(status=404)
+        if identifier == 'contours' and version == '1.0.0' and contours_dict:
+            db_connection = contours_dict['db_connection']
+        else:
+            try:
+                db_connection = mbtiles_dict[(identifier, version)]['db_connection']
+            except KeyError:
+                return Response(status=404)
 
         tile_data = None
         y_tms = (2**z - 1) - y
@@ -213,6 +227,65 @@ def simple_mbtiles_server(
         }
         style_dict['glyphs'] = request.url_root + 'v1/fonts/' + \
             fonts_identifier_with_version + '/{fontstack}/{range}.pbf'
+
+        if contours_dict:
+            style_dict['sources']['contours'] = {
+                'type': 'vector',
+                'tiles': [
+                    request.url_root + 'v1/tiles/contours@1.0.0/{z}/{x}/{y}.mvt'
+                ],
+                'minzoom': 0,
+                'maxzoom': 14,
+            }
+
+            # Linienbreite: 50hm-Linien dicker als 10hm-Linien, je nach Zoom interpoliert
+            is_50m = ['==', ['%', ['to-number', ['get', 'ele']], 50], 0]
+            line_width = [
+                'interpolate', ['linear'], ['zoom'],
+                10, ['case', is_50m, 1.2, 0.5],
+                14, ['case', is_50m, 2.0, 0.9],
+            ]
+
+            contour_line_layer = {
+                'id': 'contour-line',
+                'type': 'line',
+                'source': 'contours',
+                'source-layer': 'contours',
+                'minzoom': 10,
+                'layout': {
+                    'line-join': 'round',
+                    'visibility': 'none',
+                },
+                'paint': {
+                    'line-color': '#8b5a2b',
+                    'line-width': line_width,
+                    'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.5, 14, 1.0],
+                },
+            }
+
+            # Beschriftung nur auf 50hm-Linien
+            contour_label_layer = {
+                'id': 'contour-label',
+                'type': 'symbol',
+                'source': 'contours',
+                'source-layer': 'contours',
+                'minzoom': 12,
+                'filter': is_50m,
+                'layout': {
+                    'symbol-placement': 'line',
+                    'text-field': ['concat', ['to-string', ['get', 'ele']], ' m'],
+                    'text-font': ['Noto Sans Regular'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 12, 9, 14, 11],
+                    'visibility': 'none',
+                },
+                'paint': {
+                    'text-color': '#6b5a4b',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 1,
+                },
+            }
+
+            style_dict['layers'].extend([contour_line_layer, contour_label_layer])
 
         if 'sprite' in style_dict:
             style_dict['sprite'] = request.url_root + 'v1/styles/' + \
@@ -326,6 +399,11 @@ def simple_mbtiles_server(
     def get_index():
         return send_from_directory(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'vendor'), 'index.html')
 
+    def get_capabilities():
+        return Response(status=200, content_type='application/json', response=json.dumps({
+            'contours': bool(contours_dict),
+        }))
+
     @app.after_request
     def _add_headers(resp):
         if http_access_control_allow_origin:
@@ -333,6 +411,7 @@ def simple_mbtiles_server(
         return resp
 
     app.add_url_rule('/', view_func=get_index)
+    app.add_url_rule('/v1/capabilities', view_func=get_capabilities)
 
     app.add_url_rule(
         '/v1/tiles/<string:identifier>@<string:version>/<int:z>/<int:x>/<int:y>.mvt',
