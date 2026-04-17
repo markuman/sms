@@ -158,6 +158,45 @@
         padding: 0 4px;
       }
       .maplibregl-canvas-container.measure-active { cursor: crosshair !important; }
+      #view-search-toggle {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 8px;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        background: #f5f5f5;
+        font-size: 13px;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      #view-search-toggle:hover { background: #e8e8e8; }
+      #view-search-toggle input[type=checkbox] {
+        appearance: none;
+        width: 32px;
+        height: 17px;
+        background: #ccc;
+        border-radius: 9px;
+        position: relative;
+        cursor: pointer;
+        transition: background 0.2s;
+        flex-shrink: 0;
+      }
+      #view-search-toggle input[type=checkbox]::after {
+        content: '';
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        background: white;
+        border-radius: 50%;
+        top: 2px;
+        left: 2px;
+        transition: left 0.2s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      }
+      #view-search-toggle input[type=checkbox]:checked { background: #1060b0; }
+      #view-search-toggle input[type=checkbox]:checked::after { left: 17px; }
     </style>
   </head>
   <body>
@@ -166,6 +205,10 @@
       <button id="toolbar-toggle" title="Werkzeuge ein/ausblenden">⧼</button>
       <div id="toolbar">
         <input type="text" id="search" placeholder="Ort oder Adresse suchen..." style="width: 300px; padding: 5px;">
+        <label id="view-search-toggle" title="Suche auf aktuellen Kartenausschnitt einschränken">
+          <input type="checkbox" id="view-search-checkbox">
+          View
+        </label>
         <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
         <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
         <select id="style-select" class="toolbar-btn">
@@ -277,32 +320,68 @@
         // Photon Suche
         const searchInput = document.getElementById('search');
         const resultsContainer = document.getElementById('results');
+        var lastSearchResults = [];
+        var searchMarkers = [];
+
+        function clearSearchMarkers() {
+          searchMarkers.forEach(function(m) { m.remove(); });
+          searchMarkers = [];
+        }
+
+        function featureLabel(p) {
+          var parts = [];
+          if (p.name)    parts.push(p.name);
+          if (p.street)  parts.push(p.street + (p.housenumber ? ' ' + p.housenumber : ''));
+          if (p.postcode || p.city) parts.push((p.postcode ? p.postcode + ' ' : '') + (p.city || ''));
+          if (p.state)   parts.push(p.state);
+          if (p.country) parts.push(p.country);
+          return parts.join(', ');
+        }
+
+        function featurePopupHtml(p) {
+          var lines = [];
+          if (p.name)    lines.push('<strong>' + p.name + '</strong>');
+          if (p.type || p.osm_value) lines.push('<span style="color:#888;font-size:11px">' + (p.osm_value || p.type || '') + '</span>');
+          if (p.street)  lines.push((p.street) + (p.housenumber ? ' ' + p.housenumber : ''));
+          if (p.postcode || p.city) lines.push((p.postcode ? p.postcode + ' ' : '') + (p.city || ''));
+          if (p.district) lines.push(p.district);
+          if (p.state)   lines.push(p.state);
+          if (p.country) lines.push(p.country);
+          return lines.join('<br>');
+        }
 
         searchInput.addEventListener('input', function() {
           const query = this.value.trim();
           if (query.length < 3) {
             resultsContainer.style.display = 'none';
+            lastSearchResults = [];
             return;
           }
 
-          fetch('PHOTONSERVER/api/?q=' + encodeURIComponent(query))
+          var searchUrl = 'PHOTONSERVER/api/?q=' + encodeURIComponent(query) + '&limit=10';
+          if (document.getElementById('view-search-checkbox').checked) {
+            var bounds = map.getBounds();
+            var sw = bounds.getSouthWest();
+            var ne = bounds.getNorthEast();
+            searchUrl += '&bbox=' + sw.lng.toFixed(6) + ',' + sw.lat.toFixed(6) + ',' + ne.lng.toFixed(6) + ',' + ne.lat.toFixed(6);
+          }
+          fetch(searchUrl)
             .then(response => response.json())
             .then(data => {
+              lastSearchResults = data.features || [];
               resultsContainer.innerHTML = '';
-              if (data.features.length > 0) {
-                data.features.forEach(feature => {
+              if (lastSearchResults.length > 0) {
+                lastSearchResults.forEach(feature => {
                   const div = document.createElement('div');
-                  div.textContent = feature.properties.name + (feature.properties.city ? ', ' + feature.properties.city : '');
+                  div.textContent = featureLabel(feature.properties);
                   div.addEventListener('click', () => {
                     const [lon, lat] = feature.geometry.coordinates;
-                    map.flyTo({
-                      center: [lon, lat],
-                      zoom: 16
-                    });
+                    clearSearchMarkers();
                     if (marker) marker.remove();
                     marker = new maplibregl.Marker().setLngLat([lon, lat]).addTo(map);
+                    map.flyTo({ center: [lon, lat], zoom: 16 });
                     resultsContainer.style.display = 'none';
-                    searchInput.value = div.textContent;
+                    searchInput.value = featureLabel(feature.properties);
                   });
                   resultsContainer.appendChild(div);
                 });
@@ -318,7 +397,32 @@
         });
 
         searchInput.addEventListener('keydown', function(e) {
-          if (e.key === 'Enter') {
+          if (e.key === 'Enter' && e.shiftKey) {
+            e.preventDefault();
+            if (!lastSearchResults.length) return;
+            clearSearchMarkers();
+            if (marker) { marker.remove(); marker = null; }
+            resultsContainer.style.display = 'none';
+            var lngs = [], lats = [];
+            lastSearchResults.forEach(function(feature) {
+              var lon = feature.geometry.coordinates[0];
+              var lat = feature.geometry.coordinates[1];
+              lngs.push(lon); lats.push(lat);
+              var popup = new maplibregl.Popup({ closeOnClick: false, offset: 12 })
+                .setHTML(featurePopupHtml(feature.properties));
+              var m = new maplibregl.Marker({ color: '#1060b0' })
+                .setLngLat([lon, lat])
+                .setPopup(popup)
+                .addTo(map);
+              m.togglePopup();
+              searchMarkers.push(m);
+            });
+            map.fitBounds(
+              [[Math.min.apply(null,lngs), Math.min.apply(null,lats)],
+               [Math.max.apply(null,lngs), Math.max.apply(null,lats)]],
+              { padding: 80, maxZoom: 14 }
+            );
+          } else if (e.key === 'Enter') {
             const firstResult = resultsContainer.querySelector('div');
             if (firstResult) {
               firstResult.click();
