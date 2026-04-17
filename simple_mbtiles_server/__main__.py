@@ -160,6 +160,16 @@ def simple_mbtiles_server(
         rows = cursor.fetchall()
         cursor.close()
 
+        if not rows and identifier == 'contours' and version == '1.0.0' and z == 14:
+            z_fb = 13
+            x_fb = x // 2
+            y_fb = y // 2
+            y_tms_fb = (2**z_fb - 1) - y_fb
+            cursor2 = db_connection.cursor()
+            cursor2.execute(sql, (z_fb, x_fb, y_tms_fb))
+            rows = cursor2.fetchall()
+            cursor2.close()
+
         if rows:
             tile_data = rows[0][0]  # Get the tile data from the first row
 
