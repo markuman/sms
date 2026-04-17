@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Example map</title>
+    <title>sms</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
     <script src="/v1/static/maplibre-gl@5.19.0/maplibre-gl.js"></script>
     <link href="/v1/static/maplibre-gl@5.19.0/maplibre-gl.css" rel="stylesheet">
@@ -126,6 +126,19 @@
         font-weight: bold;
         color: #555;
       }
+      #measure-btn.active {
+        background: #d04020;
+        color: white;
+        border-color: #a03010;
+      }
+      #measure-result {
+        font-size: 13px;
+        font-weight: bold;
+        color: #d04020;
+        white-space: nowrap;
+        padding: 0 4px;
+      }
+      .maplibregl-canvas-container.measure-active { cursor: crosshair !important; }
     </style>
   </head>
   <body>
@@ -146,6 +159,8 @@
         <option value="positron-gl-style">Positron</option>
         <option value="osuv-style">osuv</option>
       </select>
+      <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
+      <span id="measure-result" style="display:none"></span>
       <label id="contour-toggle">
         <input type="checkbox" id="contour-checkbox">
         Höhenlinien
@@ -258,6 +273,124 @@
           applyContourVisibility();
         });
       });
+
+        // --- Distanzmessung ---
+        var measureActive = false;
+        var measurePoints = [];
+        var measurePopup = null;
+
+        function formatDist(m) {
+          return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m';
+        }
+
+        function measureTotalDist() {
+          var total = 0;
+          for (var i = 1; i < measurePoints.length; i++) {
+            total += new maplibregl.LngLat(measurePoints[i-1][0], measurePoints[i-1][1])
+                         .distanceTo(new maplibregl.LngLat(measurePoints[i][0], measurePoints[i][1]));
+          }
+          return total;
+        }
+
+        function updateMeasureLayers() {
+          var lineData = {
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: measurePoints }
+          };
+          var pointData = {
+            type: 'FeatureCollection',
+            features: measurePoints.map(function(c, i) {
+              return { type: 'Feature', properties: { idx: i }, geometry: { type: 'Point', coordinates: c } };
+            })
+          };
+          if (map.getSource('measure-line')) {
+            map.getSource('measure-line').setData(lineData);
+            map.getSource('measure-points').setData(pointData);
+          }
+          var res = document.getElementById('measure-result');
+          if (measurePoints.length >= 2) {
+            res.style.display = '';
+            res.textContent = formatDist(measureTotalDist());
+          } else {
+            res.style.display = 'none';
+          }
+        }
+
+        function addMeasureSources() {
+          if (map.getSource('measure-line')) return;
+          map.addSource('measure-line', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } } });
+          map.addSource('measure-points', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+          map.addLayer({ id: 'measure-line', type: 'line', source: 'measure-line',
+            paint: { 'line-color': '#d04020', 'line-width': 2, 'line-dasharray': [4, 3] } });
+          map.addLayer({ id: 'measure-points', type: 'circle', source: 'measure-points',
+            paint: { 'circle-radius': 5, 'circle-color': '#d04020', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+        }
+
+        function clearMeasure() {
+          measurePoints = [];
+          if (map.getSource('measure-line')) {
+            map.getSource('measure-line').setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: [] } });
+            map.getSource('measure-points').setData({ type: 'FeatureCollection', features: [] });
+          }
+          if (measurePopup) { measurePopup.remove(); measurePopup = null; }
+          document.getElementById('measure-result').style.display = 'none';
+        }
+
+        function stopMeasure() {
+          measureActive = false;
+          document.getElementById('measure-btn').classList.remove('active');
+          map.getCanvasContainer().classList.remove('measure-active');
+          map.off('click', onMeasureClick);
+          map.off('dblclick', onMeasureDblClick);
+          if (measurePoints.length >= 2) {
+            var last = measurePoints[measurePoints.length - 1];
+            if (measurePopup) measurePopup.remove();
+            measurePopup = new maplibregl.Popup({ closeOnClick: false, className: 'measure-popup' })
+              .setLngLat(last)
+              .setHTML('<strong>' + formatDist(measureTotalDist()) + '</strong>')
+              .addTo(map);
+          }
+        }
+
+        function onMeasureClick(e) {
+          // dblclick fires click twice — ignore second click of dblclick
+          if (e.originalEvent && e.originalEvent.detail >= 2) return;
+          measurePoints.push([e.lngLat.lng, e.lngLat.lat]);
+          addMeasureSources();
+          updateMeasureLayers();
+        }
+
+        function onMeasureDblClick(e) {
+          e.preventDefault();
+          stopMeasure();
+        }
+
+        document.getElementById('measure-btn').addEventListener('click', function() {
+          if (measureActive) {
+            stopMeasure();
+          } else {
+            clearMeasure();
+            measureActive = true;
+            this.classList.add('active');
+            map.getCanvasContainer().classList.add('measure-active');
+            addMeasureSources();
+            map.on('click', onMeasureClick);
+            map.on('dblclick', onMeasureDblClick);
+          }
+        });
+
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape' && measureActive) stopMeasure();
+        });
+
+        // Messlayer nach Style-Reload wiederherstellen
+        map.on('style.load', function() {
+          if (measurePoints.length > 0) {
+            addMeasureSources();
+            updateMeasureLayers();
+          }
+        });
+        // --- Ende Distanzmessung ---
 
         // GPX Track entfernen
         document.getElementById('gpx-clear').addEventListener('click', function() {
