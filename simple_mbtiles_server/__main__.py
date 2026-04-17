@@ -103,6 +103,7 @@ def simple_mbtiles_server(
 
             ('positron-gl-style', '1.0.0', ('style.json', 'sprite.json',
              'sprite.png', 'sprite@2x.json', 'sprite@2x.png',)),
+            ('osuv-style', '1.0.0', ('style.json',)),
         )
     }
 

@@ -144,6 +144,7 @@
         <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
         <option value="maptiler-toner-gl-style">MapTiler Toner</option>
         <option value="positron-gl-style">Positron</option>
+        <option value="osuv-style">osuv</option>
       </select>
       <label id="contour-toggle">
         <input type="checkbox" id="contour-checkbox">
@@ -231,6 +232,22 @@
         contoursVisible = this.checked;
         applyContourVisibility();
       });
+
+      // Browsersprache für Kartenbeschriftung ermitteln (z.B. "de", "fr", "en")
+      var mapLang = (navigator.language || 'en').split('-')[0];
+
+      // Alle Symbol-Layer auf die Browsersprache umschalten
+      function applyMapLanguage() {
+        const langField = ['coalesce', ['get', 'name:' + mapLang], ['get', 'name:latin'], ['get', 'name']];
+        map.getStyle().layers.forEach(function(layer) {
+          if (layer.type !== 'symbol') return;
+          var tf = map.getLayoutProperty(layer.id, 'text-field');
+          if (!tf) return;
+          try { map.setLayoutProperty(layer.id, 'text-field', langField); } catch(e) {}
+        });
+      }
+
+      map.on('style.load', applyMapLanguage);
 
       // Style wechseln — Contour-Sichtbarkeit nach Style-Reload wiederherstellen
       document.getElementById('style-select').addEventListener('change', function() {
