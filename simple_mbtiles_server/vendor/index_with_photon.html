@@ -14,6 +14,12 @@
         left: 10px;
         z-index: 10;
         display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      #panel-row {
+        display: flex;
         align-items: flex-start;
         gap: 6px;
       }
@@ -197,41 +203,200 @@
       }
       #view-search-toggle input[type=checkbox]:checked { background: #1060b0; }
       #view-search-toggle input[type=checkbox]:checked::after { left: 17px; }
+      /* --- Desktop: Seiten-Wrapper sind unsichtbar, alle Items fließen normal --- */
+      .tb-page { display: contents; }
+      #tb-prev, #tb-next, #tb-indicator { display: none; }
+      #search { width: 300px; padding: 5px; }
+      /* --- Mobile: Carousel-Toolbar --- */
+      @media (max-width: 640px) {
+        #panel { width: calc(100vw - 20px); }
+        #panel-row { width: 100%; }
+        #toolbar {
+          flex: 1;
+          min-width: 0;
+          justify-content: space-between;
+        }
+        .tb-page {
+          display: none;
+          flex: 1;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+          flex-wrap: wrap;
+        }
+        .tb-page.active { display: flex; }
+        #search { width: 100% !important; min-width: 0; flex: 1; box-sizing: border-box; }
+        #tb-prev, #tb-next {
+          display: flex;
+          flex-shrink: 0;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 36px;
+          background: none;
+          border: none;
+          font-size: 18px;
+          color: #777;
+          cursor: pointer;
+          padding: 0;
+          line-height: 1;
+        }
+        #tb-prev:hover, #tb-next:hover { color: #333; }
+        #tb-prev:disabled, #tb-next:disabled { color: #ccc; cursor: default; }
+        #tb-indicator {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          flex-shrink: 0;
+        }
+        .tb-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #ccc;
+          transition: background 0.2s;
+        }
+        .tb-dot.active { background: #555; }
+        .toolbar-btn, #style-select, #view-search-toggle,
+        #contour-toggle, #measure-btn, #gpx-clear {
+          min-height: 36px;
+          font-size: 14px;
+        }
+        .poi-btn { width: 40px; height: 40px; font-size: 20px; }
+        #poi-panel {
+          margin-left: 0;
+          width: 100%;
+          flex-wrap: wrap;
+          justify-content: flex-start;
+        }
+        #zoom-indicator { pointer-events: none; }
+        #measure-result { font-size: 14px; }
+      }
+      #poi-toggle {
+        flex-shrink: 0;
+        width: 36px;
+        height: 36px;
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        color: #555;
+        transition: background 0.2s, transform 0.2s;
+        padding: 0;
+        line-height: 1;
+      }
+      #poi-toggle:hover { background: #e8e8e8; }
+      #poi-toggle.open { transform: rotate(180deg); }
+      #poi-panel {
+        margin-left: 42px;
+        background: white;
+        padding: 6px 8px;
+        border-radius: 4px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        transition: opacity 0.2s, transform 0.2s;
+      }
+      #poi-panel.hidden {
+        opacity: 0;
+        transform: translateY(-8px);
+        pointer-events: none;
+      }
+      .poi-btn {
+        cursor: pointer;
+        width: 32px;
+        height: 32px;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        background: #f5f5f5;
+        font-size: 17px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        transition: background 0.15s, box-shadow 0.15s;
+      }
+      .poi-btn:hover { background: #e8e8e8; }
+      .poi-btn.active {
+        background: #d0e8ff;
+        border-color: #1060b0;
+        box-shadow: 0 0 0 2px rgba(16,96,176,0.25);
+      }
+      #poi-clear {
+        margin-left: 2px;
+        font-size: 13px;
+        padding: 5px 7px;
+      }
     </style>
   </head>
   <body>
     <div id="map"></div>
     <div id="panel">
-      <button id="toolbar-toggle" title="Werkzeuge ein/ausblenden">⧼</button>
-      <div id="toolbar">
-        <input type="text" id="search" placeholder="Ort oder Adresse suchen..." style="width: 300px; padding: 5px;">
-        <label id="view-search-toggle" title="Suche auf aktuellen Kartenausschnitt einschränken">
-          <input type="checkbox" id="view-search-checkbox">
-          View
-        </label>
-        <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
-        <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
-        <select id="style-select" class="toolbar-btn">
-          <option value="osm-bright-gl-style" selected>OSM Bright</option>
-          <option value="dark-matter-gl-style">Dark Matter</option>
-          <option value="fiord-color-gl-style">Fiord Color</option>
-          <option value="maptiler-3d-gl-style">MapTiler 3D</option>
-          <option value="maptiler-basic-gl-style">MapTiler Basic</option>
-          <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
-          <option value="maptiler-toner-gl-style">MapTiler Toner</option>
-          <option value="positron-gl-style">Positron</option>
-          <option value="osuv-style">osuv</option>
-        </select>
-        <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
-        <span id="measure-result" style="display:none"></span>
-        <label id="contour-toggle">
-          <input type="checkbox" id="contour-checkbox">
-          Höhenlinien
-        </label>
-        <div id="zoom-indicator" title="Aktuelle Zoomstufe">
-          <span class="zoom-icon">🔍</span>
-          <div id="zoom-badge">1</div>
+      <div id="panel-row">
+        <button id="toolbar-toggle" title="Werkzeuge ein/ausblenden">⧼</button>
+        <div id="toolbar">
+          <button id="tb-prev" title="Zurück">◀</button>
+          <!-- Seite 0: Suche -->
+          <div class="tb-page active" id="tb-page-0">
+            <button id="poi-toggle" title="POI-Kategorien ein/ausblenden">▼</button>
+            <input type="text" id="search" placeholder="Ort oder Adresse suchen...">
+            <label id="view-search-toggle" title="Suche auf aktuellen Kartenausschnitt einschränken">
+              <input type="checkbox" id="view-search-checkbox">
+              View
+            </label>
+          </div>
+          <!-- Seite 1: Karte -->
+          <div class="tb-page" id="tb-page-1">
+            <select id="style-select" class="toolbar-btn">
+              <option value="osm-bright-gl-style" selected>OSM Bright</option>
+              <option value="dark-matter-gl-style">Dark Matter</option>
+              <option value="fiord-color-gl-style">Fiord Color</option>
+              <option value="maptiler-3d-gl-style">MapTiler 3D</option>
+              <option value="maptiler-basic-gl-style">MapTiler Basic</option>
+              <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
+              <option value="maptiler-toner-gl-style">MapTiler Toner</option>
+              <option value="positron-gl-style">Positron</option>
+              <option value="osuv-style">osuv</option>
+            </select>
+            <label id="contour-toggle">
+              <input type="checkbox" id="contour-checkbox">
+              Höhenlinien
+            </label>
+            <div id="zoom-indicator" title="Aktuelle Zoomstufe">
+              <span class="zoom-icon">🔍</span>
+              <div id="zoom-badge">1</div>
+            </div>
+          </div>
+          <!-- Seite 2: Track & Messen -->
+          <div class="tb-page" id="tb-page-2">
+            <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
+            <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
+            <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
+            <span id="measure-result" style="display:none"></span>
+          </div>
+          <div id="tb-indicator">
+            <span class="tb-dot active"></span>
+            <span class="tb-dot"></span>
+            <span class="tb-dot"></span>
+          </div>
+          <button id="tb-next" title="Weiter">▶</button>
         </div>
+      </div>
+      <div id="poi-panel" class="hidden">
+        <button class="poi-btn" data-poi="supermarket" title="Lebensmittel">🛒</button>
+        <button class="poi-btn" data-poi="pharmacy" title="Apotheke">💊</button>
+        <button class="poi-btn" data-poi="hospital" title="Krankenhaus / Arzt">🏥</button>
+        <button class="poi-btn" data-poi="fuel" title="Tankstelle">⛽</button>
+        <button class="poi-btn" data-poi="charging_station" title="Ladesäule">⚡</button>
+        <button class="poi-btn" data-poi="alpine_hut" title="Schutzhütte">🏕️</button>
+        <button id="poi-clear" class="toolbar-btn" title="POI-Marker löschen">✕</button>
       </div>
     </div>
     <div id="results"></div>
@@ -240,6 +405,7 @@
       var gpxData = null;
       var contoursAvailable = false;
       var contoursVisible = false;
+      var poiTilesId = 'mytiles@1.0.0'; // wird nach map.load aus der Source überschrieben
 
       function applyContourVisibility() {
         if (!contoursAvailable) return;
@@ -295,6 +461,12 @@
         if (params.lat !== 0 || params.lng !== 0) {
           marker = new maplibregl.Marker().setLngLat([params.lng, params.lat]).addTo(map);
         }
+        // Tileset-ID aus der geladenen Source lesen (für POI-Endpoint)
+        try {
+          var tileUrl = map.getSource('openmaptiles').tiles[0];
+          var m = tileUrl.match(/\/v1\/tiles\/([^\/]+)\//);
+          if (m) poiTilesId = m[1];
+        } catch(e) {}
       });
 
       // Zoom-Badge aktualisieren
@@ -307,8 +479,55 @@
       // Toolbar-Toggle
       document.getElementById('toolbar-toggle').addEventListener('click', function() {
         document.getElementById('toolbar').classList.toggle('hidden');
-        this.textContent = document.getElementById('toolbar').classList.contains('hidden') ? '⧽' : '⧼';
+        const isHidden = document.getElementById('toolbar').classList.contains('hidden');
+        this.textContent = isHidden ? '⧽' : '⧼';
+        // POI-Panel ausblenden wenn Toolbar versteckt wird
+        if (isHidden) {
+          document.getElementById('poi-panel').classList.add('hidden');
+          document.getElementById('poi-toggle').classList.remove('open');
+        }
       });
+
+      // --- Toolbar-Carousel (Mobile) ---
+      (function() {
+        var pages = Array.from(document.querySelectorAll('.tb-page'));
+        var dots  = Array.from(document.querySelectorAll('.tb-dot'));
+        var btnPrev = document.getElementById('tb-prev');
+        var btnNext = document.getElementById('tb-next');
+        var current = 0;
+
+        function goTo(idx) {
+          pages[current].classList.remove('active');
+          dots[current].classList.remove('active');
+          current = (idx + pages.length) % pages.length;
+          pages[current].classList.add('active');
+          dots[current].classList.add('active');
+          btnPrev.disabled = (current === 0);
+          btnNext.disabled = (current === pages.length - 1);
+        }
+
+        btnPrev.addEventListener('click', function() { goTo(current - 1); });
+        btnNext.addEventListener('click', function() { goTo(current + 1); });
+
+        // Touch-Swipe auf der Toolbar
+        var touchStartX = null;
+        var toolbar = document.getElementById('toolbar');
+        toolbar.addEventListener('touchstart', function(e) {
+          touchStartX = e.touches[0].clientX;
+        }, { passive: true });
+        toolbar.addEventListener('touchend', function(e) {
+          if (touchStartX === null) return;
+          var dx = e.changedTouches[0].clientX - touchStartX;
+          touchStartX = null;
+          if (Math.abs(dx) < 40) return; // zu kurz → kein Swipe
+          if (dx < 0 && current < pages.length - 1) goTo(current + 1);
+          if (dx > 0 && current > 0) goTo(current - 1);
+        }, { passive: true });
+
+        // Initialer Zustand
+        goTo(0);
+      })();
+      // --- Ende Toolbar-Carousel ---
 
       // Contour-Toggle
       document.getElementById('contour-checkbox').addEventListener('change', function() {
@@ -587,6 +806,187 @@
           };
           reader.readAsText(file);
         });
-			</script>
+	        // --- POI-Suche via queryRenderedFeatures ---
+        var poiMarkers = [];
+        var activePoiCategory = null;
+
+        // OpenMapTiles POI-Klassen je Kategorie
+        var POI_CATEGORIES = {
+          supermarket: {
+            title: 'Lebensmittel',
+            match: function(p) {
+              return ['supermarket','convenience','grocery','food'].indexOf(p.subclass) !== -1
+                  || ['supermarket','convenience','grocery'].indexOf(p.class) !== -1;
+            }
+          },
+          pharmacy: {
+            title: 'Apotheke',
+            match: function(p) {
+              return p.subclass === 'pharmacy' || p.class === 'pharmacy';
+            }
+          },
+          hospital: {
+            title: 'Krankenhaus / Arzt',
+            match: function(p) {
+              return ['hospital','clinic','doctors','dentist'].indexOf(p.subclass) !== -1
+                  || p.class === 'hospital';
+            }
+          },
+          fuel: {
+            title: 'Tankstelle',
+            match: function(p) {
+              return p.subclass === 'fuel' || p.class === 'fuel';
+            }
+          },
+          charging_station: {
+            title: 'Ladesäule',
+            match: function(p) {
+              return p.subclass === 'charging_station' || p.class === 'charging_station';
+            }
+          },
+          alpine_hut: {
+            title: 'Schutzhütte / Camping',
+            match: function(p) {
+              return ['alpine_hut','wilderness_hut','shelter','lean_to','basic_hut','camp_site'].indexOf(p.subclass) !== -1
+                  || ['shelter','accommodation','campsite'].indexOf(p.class) !== -1;
+            }
+          }
+        };
+
+        function poiPopupHtml(name, subclass, addr) {
+          var lines = ['<strong>' + name + '</strong>'];
+          if (subclass && subclass !== name)
+            lines.push('<span style="color:#888;font-size:11px">' + subclass + '</span>');
+          if (addr) {
+            if (addr.street)
+              lines.push(addr.street + (addr.housenumber ? ' ' + addr.housenumber : ''));
+            if (addr.postcode || addr.city)
+              lines.push((addr.postcode ? addr.postcode + ' ' : '') + (addr.city || ''));
+            if (addr.state && addr.state !== addr.city)
+              lines.push(addr.state);
+            if (addr.country)
+              lines.push('<span style="color:#aaa;font-size:11px">' + addr.country + '</span>');
+          } else if (addr === null) {
+            // noch nicht geladen – Platzhalter
+            lines.push('<span style="color:#bbb;font-size:11px">Adresse wird geladen…</span>');
+          }
+          return lines.join('<br>');
+        }
+
+        function clearPoiMarkers() {
+          poiMarkers.forEach(function(m) { m.remove(); });
+          poiMarkers = [];
+        }
+
+        function _addPoiMarker(f, catTitle) {
+          var p = f.properties || {};
+          var name = p.name || p['name:de'] || p['name:latin'] || catTitle;
+          var coords = f.geometry.coordinates;
+          var popup = new maplibregl.Popup({ offset: 12, closeOnClick: false })
+            .setHTML(poiPopupHtml(name, p.subclass, null));
+          // Adresse lazy via Photon Reverse nachladen
+          popup.on('open', function() {
+            if (popup._photonLoaded) return;
+            popup._photonLoaded = true;
+            var url = 'PHOTONSERVER/reverse?lat=' + coords[1] + '&lon=' + coords[0] + '&limit=1';
+            fetch(url)
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                var addr = (data.features && data.features[0]) ? data.features[0].properties : null;
+                popup.setHTML(poiPopupHtml(name, p.subclass, addr));
+              })
+              .catch(function() {});
+          });
+          var m = new maplibregl.Marker({ color: '#1060b0' })
+            .setLngLat(coords)
+            .setPopup(popup)
+            .addTo(map);
+          poiMarkers.push(m);
+        }
+
+        function poiSearch(category) {
+          clearPoiMarkers();
+
+          var cat = POI_CATEGORIES[category];
+          if (!cat) return;
+
+          // Loading-Indikator: aktiver Button zeigt Ladezeichen
+          var activeBtn = document.querySelector('.poi-btn[data-poi="' + category + '"]');
+          var origLabel = activeBtn ? activeBtn.textContent : '';
+          if (activeBtn) activeBtn.textContent = '…';
+
+          var center = map.getCenter();
+          var url = '/v1/poi/' + poiTilesId
+            + '?lat=' + center.lat.toFixed(6)
+            + '&lon=' + center.lng.toFixed(6)
+            + '&radius=15&category=' + encodeURIComponent(category);
+
+          fetch(url)
+            .then(function(r) {
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              return r.json();
+            })
+            .then(function(geojson) {
+              if (activeBtn) activeBtn.textContent = origLabel;
+              if (!geojson.features || geojson.features.length === 0) {
+                var info = new maplibregl.Popup({ closeOnClick: true, anchor: 'top-left' })
+                  .setLngLat(map.getCenter())
+                  .setHTML('<span style="font-size:12px;color:#666">Keine ' + cat.title + ' im 15 km-Umkreis gefunden.</span>')
+                  .addTo(map);
+                setTimeout(function() { info.remove(); }, 3000);
+                return;
+              }
+              geojson.features.forEach(function(f) { _addPoiMarker(f, cat.title); });
+            })
+            .catch(function() {
+              if (activeBtn) activeBtn.textContent = origLabel;
+            });
+        }
+
+        // POI-Toggle Button
+        document.getElementById('poi-toggle').addEventListener('click', function() {
+          var panel = document.getElementById('poi-panel');
+          panel.classList.toggle('hidden');
+          this.classList.toggle('open');
+          if (panel.classList.contains('hidden')) {
+            clearPoiMarkers();
+            document.querySelectorAll('.poi-btn').forEach(function(b) { b.classList.remove('active'); });
+            activePoiCategory = null;
+          }
+        });
+
+        // POI-Kategorie Buttons
+        document.querySelectorAll('.poi-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var cat = this.getAttribute('data-poi');
+            if (activePoiCategory === cat) {
+              // Gleiche Kategorie nochmal: Marker löschen / deaktivieren
+              clearPoiMarkers();
+              this.classList.remove('active');
+              activePoiCategory = null;
+            } else {
+              document.querySelectorAll('.poi-btn').forEach(function(b) { b.classList.remove('active'); });
+              this.classList.add('active');
+              activePoiCategory = cat;
+              poiSearch(cat);
+            }
+          });
+        });
+
+        // POI-Marker löschen
+        document.getElementById('poi-clear').addEventListener('click', function() {
+          clearPoiMarkers();
+          document.querySelectorAll('.poi-btn').forEach(function(b) { b.classList.remove('active'); });
+          activePoiCategory = null;
+        });
+
+        // POI nach Style-Reload neu laden
+        map.on('style.load', function() {
+          if (activePoiCategory) {
+            setTimeout(function() { poiSearch(activePoiCategory); }, 300);
+          }
+        });
+        // --- Ende POI-Suche ---
+		</script>
   </body>
 </html>

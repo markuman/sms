@@ -8,7 +8,9 @@ import itertools
 import json
 import logging
 import os
+import math
 import signal
+import struct
 import sys
 import tarfile
 import tempfile
@@ -31,6 +33,261 @@ from werkzeug.middleware.proxy_fix import (
 )
 
 from .glyphs_pb2 import glyphs
+
+
+# ---------------------------------------------------------------------------
+# POI radius search helpers
+# ---------------------------------------------------------------------------
+
+def _lat_lon_to_tile(lat, lon, zoom):
+    n = 2 ** zoom
+    x = int((lon + 180.0) / 360.0 * n)
+    lat_rad = math.radians(lat)
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    # clamp to valid range
+    y = max(0, min(n - 1, y))
+    x = max(0, min(n - 1, x))
+    return x, y
+
+
+def _tiles_in_radius(lat, lon, radius_km, zoom=14, max_tiles=100):
+    delta_lat = radius_km / 111.0
+    delta_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+    x0, y1 = _lat_lon_to_tile(lat - delta_lat, lon - delta_lon, zoom)
+    x1, y0 = _lat_lon_to_tile(lat + delta_lat, lon + delta_lon, zoom)
+    tiles = [
+        (zoom, x, y)
+        for x in range(x0, x1 + 1)
+        for y in range(y0, y1 + 1)
+    ]
+    if len(tiles) > max_tiles:
+        cx, cy = _lat_lon_to_tile(lat, lon, zoom)
+        tiles.sort(key=lambda t: (t[1] - cx) ** 2 + (t[2] - cy) ** 2)
+        tiles = tiles[:max_tiles]
+    return tiles
+
+
+_POI_CATEGORY_FILTERS = {
+    'supermarket': {
+        'subclass': {'supermarket', 'convenience', 'grocery', 'food'},
+        'class':    {'supermarket', 'convenience'},
+    },
+    'pharmacy': {
+        'subclass': {'pharmacy'},
+        'class':    {'pharmacy'},
+    },
+    'hospital': {
+        'subclass': {'hospital', 'clinic', 'doctors', 'dentist'},
+        'class':    {'hospital'},
+    },
+    'fuel': {
+        'subclass': {'fuel'},
+        'class':    {'fuel'},
+    },
+    'charging_station': {
+        'subclass': {'charging_station'},
+        'class':    {'charging_station'},
+    },
+    'alpine_hut': {
+        'subclass': {
+            'alpine_hut', 'wilderness_hut', 'shelter',
+            'lean_to', 'basic_hut', 'camp_site',
+        },
+        'class': {'shelter', 'accommodation', 'campsite'},
+    },
+}
+
+
+def _matches_poi_category(props, category):
+    f = _POI_CATEGORY_FILTERS.get(category)
+    if not f:
+        return False
+    return (props.get('subclass') in f['subclass'] or
+            props.get('class') in f['class'])
+
+
+# --- Minimal protobuf / MVT decoder (no extra dependencies) ----------------
+
+def _varint(data, pos):
+    result = shift = 0
+    while True:
+        b = data[pos]; pos += 1
+        result |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return result, pos
+        shift += 7
+
+
+def _zigzag(n):
+    return (n >> 1) ^ -(n & 1)
+
+
+def _parse_mvt_value(data):
+    """Decode a vector_tile.Tile.Value message → Python scalar."""
+    pos = 0
+    while pos < len(data):
+        tag, pos = _varint(data, pos)
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 0:
+            v, pos = _varint(data, pos)
+            if field == 4:
+                return v           # int_value
+            if field == 5:
+                return v           # uint_value
+            if field == 6:
+                return _zigzag(v)  # sint_value
+            if field == 7:
+                return bool(v)     # bool_value
+        elif wire == 2:
+            length, pos = _varint(data, pos)
+            chunk = data[pos:pos + length]; pos += length
+            if field == 1:
+                return chunk.decode('utf-8', errors='replace')  # string_value
+        elif wire == 5:
+            v = struct.unpack_from('<f', data, pos)[0]; pos += 4
+            return v               # float_value
+        elif wire == 1:
+            v = struct.unpack_from('<d', data, pos)[0]; pos += 8
+            return v               # double_value
+        else:
+            break
+    return None
+
+
+def _parse_mvt_feature(data):
+    """Decode a vector_tile.Tile.Feature → (tags, geom_type, geometry)."""
+    pos = 0
+    tags = []
+    geom_type = 0
+    geometry = []
+    while pos < len(data):
+        tag, pos = _varint(data, pos)
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 0:
+            v, pos = _varint(data, pos)
+            if field == 3:
+                geom_type = v
+        elif wire == 2:
+            length, pos = _varint(data, pos)
+            chunk = data[pos:pos + length]; pos += length
+            if field in (2, 4):  # tags or geometry (packed uint32)
+                p2, vals = 0, []
+                while p2 < len(chunk):
+                    v, p2 = _varint(chunk, p2)
+                    vals.append(v)
+                if field == 2:
+                    tags = vals
+                else:
+                    geometry = vals
+    return tags, geom_type, geometry
+
+
+def _parse_mvt_layer(data):
+    """Decode a vector_tile.Tile.Layer → (name, keys, values, raw_features, extent)."""
+    pos = 0
+    name = ''
+    keys = []
+    values = []
+    raw_features = []
+    extent = 4096
+    while pos < len(data):
+        tag, pos = _varint(data, pos)
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 2:
+            length, pos = _varint(data, pos)
+            chunk = data[pos:pos + length]; pos += length
+            if field == 1:
+                name = chunk.decode('utf-8', errors='replace')
+            elif field == 2:
+                raw_features.append(chunk)
+            elif field == 3:
+                keys.append(chunk.decode('utf-8', errors='replace'))
+            elif field == 4:
+                values.append(_parse_mvt_value(chunk))
+        elif wire == 0:
+            v, pos = _varint(data, pos)
+            if field == 5:
+                extent = v
+    return name, keys, values, raw_features, extent
+
+
+def _parse_mvt_poi(raw_tile, tile_x, tile_y, zoom, category):
+    """
+    Decompress and parse a raw MVT tile blob.
+    Returns a list of GeoJSON Point features matching *category*.
+    """
+    try:
+        data = zlib.decompress(raw_tile, wbits=32 + zlib.MAX_WBITS)
+    except Exception:
+        data = raw_tile  # tile may already be uncompressed
+
+    features = []
+    pos = 0
+    n = 2 ** zoom
+
+    while pos < len(data):
+        try:
+            tag, pos = _varint(data, pos)
+        except IndexError:
+            break
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 2:
+            try:
+                length, pos = _varint(data, pos)
+            except IndexError:
+                break
+            chunk = data[pos:pos + length]; pos += length
+            if field != 3:          # 3 = Layer in Tile message
+                continue
+            layer_name, keys, values, raw_features, extent = _parse_mvt_layer(chunk)
+            if layer_name != 'poi':
+                continue
+            for rf in raw_features:
+                tags, geom_type, geometry = _parse_mvt_feature(rf)
+                if geom_type != 1:  # POINT only
+                    continue
+                # Decode properties from parallel key/value index arrays
+                props = {}
+                for i in range(0, len(tags) - 1, 2):
+                    ki, vi = tags[i], tags[i + 1]
+                    if ki < len(keys) and vi < len(values):
+                        props[keys[ki]] = values[vi]
+                if not _matches_poi_category(props, category):
+                    continue
+                # Decode point geometry (MoveTo command + one dx/dy pair)
+                # geometry[0] = command_integer, [1] = dx zigzag, [2] = dy zigzag
+                if len(geometry) < 3:
+                    continue
+                px = _zigzag(geometry[1])
+                py = _zigzag(geometry[2])
+                lon = ((tile_x + px / extent) / n) * 360.0 - 180.0
+                lat_rad = math.atan(
+                    math.sinh(math.pi * (1.0 - 2.0 * (tile_y + py / extent) / n))
+                )
+                lat = math.degrees(lat_rad)
+                features.append({
+                    'type': 'Feature',
+                    'geometry': {'type': 'Point', 'coordinates': [lon, lat]},
+                    'properties': props,
+                })
+        elif wire == 0:
+            try:
+                _, pos = _varint(data, pos)
+            except IndexError:
+                break
+        elif wire == 5:
+            pos += 4
+        elif wire == 1:
+            pos += 8
+
+    return features
+
+
+# ---------------------------------------------------------------------------
 
 
 def simple_mbtiles_server(
@@ -415,6 +672,51 @@ def simple_mbtiles_server(
             'contours': bool(contours_dict),
         }))
 
+    def get_poi(identifier, version):
+        try:
+            lat      = float(request.args['lat'])
+            lon      = float(request.args['lon'])
+            category = request.args['category']
+        except (KeyError, ValueError):
+            return Response(status=400)
+
+        if category not in _POI_CATEGORY_FILTERS:
+            return Response(status=400)
+
+        try:
+            db_connection = mbtiles_dict[(identifier, version)]['db_connection']
+        except KeyError:
+            return Response(status=404)
+
+        radius = min(float(request.args.get('radius', 15)), 50.0)  # cap at 50 km
+
+        tiles = _tiles_in_radius(lat, lon, radius, zoom=14, max_tiles=100)
+
+        seen     = set()
+        features = []
+
+        cursor = db_connection.cursor()
+        for (z, x, y) in tiles:
+            y_tms = (2 ** z - 1) - y
+            cursor.execute(sql, (z, x, y_tms))
+            row = cursor.fetchone()
+            if not row:
+                continue
+            raw_tile = row[0]
+            for f in _parse_mvt_poi(raw_tile, x, y, z, category):
+                coords = f['geometry']['coordinates']
+                key = (round(coords[0], 6), round(coords[1], 6))
+                if key not in seen:
+                    seen.add(key)
+                    features.append(f)
+        cursor.close()
+
+        return Response(
+            status=200,
+            content_type='application/json',
+            response=json.dumps({'type': 'FeatureCollection', 'features': features}),
+        )
+
     @app.after_request
     def _add_headers(resp):
         if http_access_control_allow_origin:
@@ -423,6 +725,9 @@ def simple_mbtiles_server(
 
     app.add_url_rule('/', view_func=get_index)
     app.add_url_rule('/v1/capabilities', view_func=get_capabilities)
+    app.add_url_rule(
+        '/v1/poi/<string:identifier>@<string:version>',
+        view_func=get_poi)
 
     app.add_url_rule(
         '/v1/tiles/<string:identifier>@<string:version>/<int:z>/<int:x>/<int:y>.mvt',
