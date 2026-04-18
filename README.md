@@ -70,23 +70,166 @@ There are two different contours files provided. 90m resolution in Zoom Level 11
 
 ## Core API
 
-**`GET /v1/tiles/{identifier}@{version}/{z}/{x}/{y}.mvt`**
+### `GET /`
 
-Fetch a tile in Mapbox Vector Tile (MVT) format
+Serves the map UI frontend (index.html) with optional URL parameters for coordinates and zoom level.
 
-- `identifier`
+**URL Parameters:**
+- `lat` — Latitude coordinate
+- `lng` — Longitude coordinate
+- `zoom` — Zoom level
 
-  An aribtrary identifier for a tileset configued via environment variables when starting the server, for example `MBTILES__1__IDENTIFIER` (see [Example usage](#example-usage)).
+**Example:** `https://maps.osuv.de/?lat=48.1374&lng=11.5752&zoom=9`
 
-- `version`
 
-  A version for a tileset configued via environment variables, for example `MBTILES__1__VERSION` (see [Example usage](#example-usage)). The version is part of the API to encourage releasing a new version of a tileset rather than replacing an existing one.
+### `GET /v1/capabilities`
 
-  An arbitrary version of the tileset identified by the `identifier`.
+Returns JSON capabilities indicating available optional features.
 
-- `z`, `x`, `y`
+**Response:**
+```json
+{
+  "contours": true | false
+}
+```
 
-  The xyz coordinates of a tile in this tileset
+Indicates whether contours.mbtiles was detected and available.
+
+
+### `GET /v1/poi/{identifier}@{version}?lat={lat}&lon={lon}&category={category}&radius={radius}`
+
+Search for Points of Interest (POI) within a radius and return GeoJSON features.
+
+**Path Parameters:**
+- `identifier` — Tileset identifier
+- `version` — Tileset version
+
+**Query Parameters:**
+- `lat` — Latitude coordinate (required)
+- `lon` — Longitude coordinate (required)
+- `category` — POI category: `supermarket`, `pharmacy`, `hospital`, `fuel`, `charging_station`, or `alpine_hut` (required)
+- `radius` — Search radius in km, default 15, max 50 (optional)
+
+**Response:** GeoJSON FeatureCollection of POIs
+
+
+### `GET /v1/tiles/{identifier}@{version}/{z}/{x}/{y}.mvt`
+
+Fetch a tile in Mapbox Vector Tile (MVT) format.
+
+**Path Parameters:**
+- `identifier` — Tileset identifier (e.g., from `MBTILES__1__IDENTIFIER`)
+- `version` — Tileset version (e.g., from `MBTILES__1__VERSION`)
+- `z` — Zoom level
+- `x` — Tile column coordinate
+- `y` — Tile row coordinate (converts from Web Mercator to TMS)
+
+**Special:** `contours@1.0.0` is auto-loaded if `contours.mbtiles` exists.
+
+**Gzip Negotiation:** Returns gzip-compressed tiles if client sends `Accept-Encoding: gzip`.
+
+**Response:** `application/vnd.mapbox-vector-tile` (MVT format)
+
+
+### `GET /v1/styles/{identifier}@{version}/style.json`
+
+Returns a MapLibre GL style JSON with injected tile, font, and sprite URLs.
+
+**Path Parameters:**
+- `identifier` — Style identifier (e.g., `osm-bright-gl-style`)
+- `version` — Style version (e.g., `1.0.0`)
+
+**Query Parameters:**
+- `tiles` — Tile source in format `{tile_id}@{tile_version}` (required)
+- `fonts` — Font source in format `{font_id}@{font_version}` (required)
+
+**Available Styles:**
+- `dark-matter-gl-style@1.0.0`
+- `fiord-color-gl-style@1.0.0`
+- `maptiler-3d-gl-style@1.0.0`
+- `maptiler-terrain-gl-style@1.0.0`
+- `maptiler-basic-gl-style@1.0.0`
+- `maptiler-toner-gl-style@1.0.0`
+- `osm-bright-gl-style@1.0.0`
+- `positron-gl-style@1.0.0`
+- `osuv-style@1.0.0`
+
+**Response:** `application/json` with complete style JSON including:
+- Tile source URL: `/v1/tiles/{tiles}@{version}/{z}/{x}/{y}.mvt`
+- Glyph URL: `/v1/fonts/{fonts}@{version}/{fontstack}/{range}.pbf`
+- Sprite URL: `/v1/styles/{identifier}@{version}/sprite`
+- Contour layers (if contours.mbtiles detected): `contour-line` and `contour-label` (visible when toggled in frontend)
+
+
+### `GET /v1/styles/{identifier}@{version}/sprite.json`
+
+Returns the sprite JSON index file.
+
+**Path Parameters:**
+- `identifier` — Style identifier
+- `version` — Style version
+
+**Response:** `application/json` with sprite image references and bounds
+
+
+### `GET /v1/styles/{identifier}@{version}/sprite@2x.json`
+
+Returns the high-resolution (2x) sprite JSON index file.
+
+**Path Parameters:**
+- `identifier` — Style identifier
+- `version` — Style version
+
+**Response:** `application/json` with high-res sprite references
+
+
+### `GET /v1/styles/{identifier}@{version}/sprite.png`
+
+Returns the sprite image (1x resolution).
+
+**Path Parameters:**
+- `identifier` — Style identifier
+- `version` — Style version
+
+**Response:** `image/png`
+
+
+### `GET /v1/styles/{identifier}@{version}/sprite@2x.png`
+
+Returns the sprite image (2x resolution for retina displays).
+
+**Path Parameters:**
+- `identifier` — Style identifier
+- `version` — Style version
+
+**Response:** `image/png`
+
+
+### `GET /v1/fonts/{identifier}@{version}/{stack}/{range}.pbf`
+
+Returns merged glyph data in Protocol Buffer format for font rendering.
+
+**Path Parameters:**
+- `identifier` — Font identifier (`fonts-gl`)
+- `version` — Font version (`1.0.0`)
+- `stack` — Comma-separated font stack (max 4 fonts, e.g., `Noto Sans Regular,Noto Sans Bold`)
+- `range` — Glyph range (e.g., `0-255`)
+
+**Response:** `application/vnd.google.protobuf`
+- Gzip-compressed if client sends `Accept-Encoding: gzip`
+- Merges glyphs from all fonts in stack, deduplicating by glyph ID
+
+
+### `GET /v1/static/{identifier}@{version}/{file}`
+
+Serves vendored MapLibre GL JS/CSS static assets.
+
+**Path Parameters:**
+- `identifier` — Asset identifier (`maplibre-gl`)
+- `version` — Asset version (`5.19.0`)
+- `file` — File name: `maplibre-gl.css` or `maplibre-gl.js`
+
+**Response:** CSS or JavaScript file
 
 
 ## For the curious, advanced, or developers of this server itself
