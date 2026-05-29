@@ -888,27 +888,43 @@ def simple_mbtiles_server(
                 'maxzoom': 14,
             }
 
-            # Linienbreite: 50hm-Linien dicker als 10hm-Linien, je nach Zoom interpoliert
             is_50m = ['==', ['%', ['to-number', ['get', 'ele']], 50], 0]
-            line_width = [
-                'interpolate', ['linear'], ['zoom'],
-                10, ['case', is_50m, 1.2, 0.5],
-                14, ['case', is_50m, 2.0, 0.9],
-            ]
+            is_minor = ['!=', ['%', ['to-number', ['get', 'ele']], 50], 0]
 
-            contour_line_layer = {
-                'id': 'contour-line',
+            # Zwischenlinien (10hm): heller, transparenter
+            contour_line_minor = {
+                'id': 'contour-line-minor',
                 'type': 'line',
                 'source': 'contours',
                 'source-layer': 'contours',
                 'minzoom': 10,
+                'filter': is_minor,
+                'layout': {
+                    'line-join': 'round',
+                    'visibility': 'none',
+                },
+                'paint': {
+                    'line-color': '#b89070',
+                    'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.5, 14, 0.9],
+                    'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.25, 14, 0.4],
+                },
+            }
+
+            # Index-Linien (50hm): kräftig, gut sichtbar
+            contour_line_major = {
+                'id': 'contour-line-major',
+                'type': 'line',
+                'source': 'contours',
+                'source-layer': 'contours',
+                'minzoom': 10,
+                'filter': is_50m,
                 'layout': {
                     'line-join': 'round',
                     'visibility': 'none',
                 },
                 'paint': {
                     'line-color': '#8b5a2b',
-                    'line-width': line_width,
+                    'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.2, 14, 2.0],
                     'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.5, 14, 1.0],
                 },
             }
@@ -923,6 +939,7 @@ def simple_mbtiles_server(
                 'filter': is_50m,
                 'layout': {
                     'symbol-placement': 'line',
+                    'symbol-spacing': 400,
                     'text-field': ['concat', ['to-string', ['get', 'ele']], ' m'],
                     'text-font': ['Noto Sans Regular'],
                     'text-size': ['interpolate', ['linear'], ['zoom'], 12, 9, 14, 11],
@@ -935,7 +952,7 @@ def simple_mbtiles_server(
                 },
             }
 
-            style_dict['layers'].extend([contour_line_layer, contour_label_layer])
+            style_dict['layers'].extend([contour_line_minor, contour_line_major, contour_label_layer])
 
         if 'sprite' in style_dict:
             style_dict['sprite'] = request.url_root + 'v1/styles/' + \

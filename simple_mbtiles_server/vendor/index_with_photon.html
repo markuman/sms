@@ -440,7 +440,7 @@
       function applyContourVisibility() {
         if (!contoursAvailable) return;
         const vis = contoursVisible ? 'visible' : 'none';
-        ['contour-line', 'contour-label'].forEach(id => {
+        ['contour-line-minor', 'contour-line-major', 'contour-label'].forEach(id => {
           if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
         });
       }
