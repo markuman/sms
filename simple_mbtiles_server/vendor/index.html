@@ -139,6 +139,29 @@
         padding: 0 4px;
       }
       .maplibregl-canvas-container.measure-active { cursor: crosshair !important; }
+      #route-btn.active {
+        background: #2563eb;
+        color: white;
+        border-color: #1d4ed8;
+      }
+      #route-profile {
+        display: none;
+      }
+      #route-status {
+        font-size: 13px;
+        color: #2563eb;
+        font-weight: bold;
+        white-space: nowrap;
+        padding: 0 4px;
+        display: none;
+      }
+      .maplibregl-canvas-container.route-active { cursor: crosshair !important; }
+      #info-btn.active {
+        background: #6d28d9;
+        color: white;
+        border-color: #5b21b6;
+      }
+      .maplibregl-canvas-container.info-active { cursor: crosshair !important; }
     </style>
   </head>
   <body>
@@ -161,6 +184,13 @@
       </select>
       <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
       <span id="measure-result" style="display:none"></span>
+      <button id="info-btn" class="toolbar-btn" title="Punkt-Info: Klick auf Karte zeigt Koordinaten und Adresse">📍 Info</button>
+      <button id="route-btn" class="toolbar-btn" title="Route berechnen (Fuß / Fahrrad)">🔀 Route</button>
+      <select id="route-profile" class="toolbar-btn">
+        <option value="foot">Fuß</option>
+        <option value="bike">Fahrrad</option>
+      </select>
+      <span id="route-status"></span>
       <label id="contour-toggle">
         <input type="checkbox" id="contour-checkbox">
         Höhenlinien
@@ -246,6 +276,21 @@
       document.getElementById('contour-checkbox').addEventListener('change', function() {
         contoursVisible = this.checked;
         applyContourVisibility();
+        // Höhenmeter nachladen oder ausblenden je nach Toggle-Zustand
+        if (measurePoints && measurePoints.length >= 2) {
+          var distText = formatDist(measureTotalDist());
+          var res = document.getElementById('measure-result');
+          res.innerHTML = distText;
+          fetchElevation(measurePoints, function(ele) { res.innerHTML = distText + eleHtml(ele); });
+          if (measurePopup) {
+            var dh = '<strong>' + distText + '</strong>';
+            measurePopup.setHTML(dh);
+            fetchElevation(measurePoints, function(ele) { if (measurePopup) measurePopup.setHTML(dh + eleHtml(ele)); });
+          }
+        }
+        if (routeSegments && routeSegments.length > 0) {
+          refreshRouteElevation();
+        }
       });
 
       // Browsersprache für Kartenbeschriftung ermitteln (z.B. "de", "fr", "en")
@@ -310,7 +355,11 @@
           var res = document.getElementById('measure-result');
           if (measurePoints.length >= 2) {
             res.style.display = '';
-            res.textContent = formatDist(measureTotalDist());
+            var distText = formatDist(measureTotalDist());
+            res.innerHTML = distText;
+            fetchElevation(measurePoints, function(ele) {
+              res.innerHTML = distText + eleHtml(ele);
+            });
           } else {
             res.style.display = 'none';
           }
@@ -344,11 +393,17 @@
           map.off('dblclick', onMeasureDblClick);
           if (measurePoints.length >= 2) {
             var last = measurePoints[measurePoints.length - 1];
+            var distHtml = '<strong>' + formatDist(measureTotalDist()) + '</strong>';
             if (measurePopup) measurePopup.remove();
             measurePopup = new maplibregl.Popup({ closeOnClick: false, className: 'measure-popup' })
               .setLngLat(last)
-              .setHTML('<strong>' + formatDist(measureTotalDist()) + '</strong>')
+              .setHTML(distHtml)
               .addTo(map);
+            // elevation nachladen und popup aktualisieren
+            var pts = measurePoints.slice();
+            fetchElevation(pts, function(ele) {
+              if (measurePopup) measurePopup.setHTML(distHtml + eleHtml(ele));
+            });
           }
         }
 
@@ -366,8 +421,16 @@
         }
 
         document.getElementById('measure-btn').addEventListener('click', function() {
-          if (measureActive) {
-            stopMeasure();
+          if (measureActive || measurePoints.length > 0) {
+            // aktiv oder messung vorhanden → alles zurücksetzen
+            if (measureActive) {
+              measureActive = false;
+              this.classList.remove('active');
+              map.getCanvasContainer().classList.remove('measure-active');
+              map.off('click', onMeasureClick);
+              map.off('dblclick', onMeasureDblClick);
+            }
+            clearMeasure();
           } else {
             clearMeasure();
             measureActive = true;
@@ -380,7 +443,11 @@
         });
 
         document.addEventListener('keydown', function(e) {
-          if (e.key === 'Escape' && measureActive) stopMeasure();
+          if (e.key === 'Escape') {
+            if (measureActive) stopMeasure();
+            if (routeActive || routePoints.length > 0) clearRoute();
+            if (infoActive) stopInfo();
+          }
         });
 
         // Messlayer nach Style-Reload wiederherstellen
@@ -389,8 +456,305 @@
             addMeasureSources();
             updateMeasureLayers();
           }
+          if (routeSegments.length > 0) addRouteLayers();
         });
         // --- Ende Distanzmessung ---
+
+        // --- Routing ---
+        // Tile-Identifier aus der initialen Style-URL lesen (z.B. "mytiles@1.0.0")
+        var _initialStyleUrl = '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0';
+        var _tilesParam = new URLSearchParams(_initialStyleUrl.split('?')[1]).get('tiles') || 'mytiles@1.0.0';
+        var _tilesParts = _tilesParam.split('@');
+        var routeTilesId  = _tilesParts[0];
+        var routeTilesVer = _tilesParts[1] || '1.0.0';
+
+        var routeActive    = false;
+        var routePoints    = [];    // array von [lon,lat] — alle gesetzten wegpunkte
+        var routeSegments  = [];    // array von GeoJSON-LineString-koordinaten-arrays (je segment)
+        var routeTotalKm   = 0;
+        var routeTotalMin  = 0;
+        var routeEle       = null;  // {ascent_m, descent_m} oder null
+        var routeMarkers   = [];    // maplibregl.Marker instanzen (parallel zu routePoints)
+        var routePopup     = null;
+
+        // --- Höhenmeter-Helper ---
+        function fetchElevation(coords, cb) {
+          if (!contoursVisible || !contoursAvailable) { cb(null); return; }
+          fetch('/v1/elevation/' + routeTilesId + '@' + routeTilesVer, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coordinates: coords })
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(j) { cb(j.ascent_m != null ? j : null); })
+            .catch(function() { cb(null); });
+        }
+
+        function eleHtml(ele) {
+          if (!ele) return '';
+          return ' &nbsp;·&nbsp; <span style="font-size:12px">↑ ~' + ele.ascent_m + ' m &nbsp;↓ ~' + ele.descent_m + ' m</span>';
+        }
+        // --- Ende Höhenmeter-Helper ---
+
+        function setRouteStatus(msg) {
+          var el = document.getElementById('route-status');
+          el.textContent = msg;
+          el.style.display = msg ? '' : 'none';
+        }
+
+        function combinedGeojson() {
+          // alle segment-koordinaten zu einem einzigen linestring zusammenfügen
+          var coords = [];
+          routeSegments.forEach(function(seg) {
+            if (coords.length === 0) {
+              coords = coords.concat(seg);
+            } else {
+              // ersten punkt des folgenden segments überspringen (doppelter übergangspunkt)
+              coords = coords.concat(seg.slice(1));
+            }
+          });
+          return { type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} };
+        }
+
+        function addRouteLayers() {
+          if (routeSegments.length === 0) return;
+          var data = combinedGeojson();
+          if (!map.getSource('route-line')) {
+            map.addSource('route-line', { type: 'geojson', data: data });
+            map.addLayer({ id: 'route-casing', type: 'line', source: 'route-line',
+              paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.8 } });
+            map.addLayer({ id: 'route-line', type: 'line', source: 'route-line',
+              paint: { 'line-color': '#3b82f6', 'line-width': 5 } });
+          } else {
+            map.getSource('route-line').setData(data);
+          }
+        }
+
+        function removeRouteLayers() {
+          ['route-line', 'route-casing'].forEach(function(id) {
+            if (map.getLayer(id)) map.removeLayer(id);
+          });
+          if (map.getSource('route-line')) map.removeSource('route-line');
+        }
+
+        function setMarkerColor(marker, color) {
+          marker.getElement().style.background = color;
+        }
+
+        function clearRoute() {
+          routeActive   = false;
+          routePoints   = [];
+          routeSegments = [];
+          routeTotalKm  = 0;
+          routeTotalMin = 0;
+          routeEle      = null;
+          document.getElementById('route-btn').classList.remove('active');
+          document.getElementById('route-profile').style.display = 'none';
+          map.getCanvasContainer().classList.remove('route-active');
+          map.off('click', onRouteClick);
+          routeMarkers.forEach(function(m) { m.remove(); });
+          routeMarkers = [];
+          if (routePopup) { routePopup.remove(); routePopup = null; }
+          removeRouteLayers();
+          setRouteStatus('');
+        }
+
+        function placeMarker(lngLat, color) {
+          var el = document.createElement('div');
+          el.style.cssText = 'width:14px;height:14px;border-radius:50%;background:' + color +
+            ';border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);';
+          var m = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+          routeMarkers.push(m);
+          return m;
+        }
+
+        function updateRoutePopup() {
+          var lastPt = routePoints[routePoints.length - 1];
+          if (routePopup) routePopup.remove();
+          routePopup = new maplibregl.Popup({ closeOnClick: false })
+            .setLngLat(lastPt)
+            .setHTML('<strong style="font-size:14px">' + routeTotalKm.toFixed(1) + ' km</strong>' +
+              ' &nbsp;·&nbsp; <span style="font-size:13px">~' + Math.round(routeTotalMin) + ' min</span>' +
+              eleHtml(routeEle))
+            .addTo(map);
+        }
+
+        function refreshRouteElevation() {
+          if (routeSegments.length === 0) return;
+          var combined = combinedGeojson().geometry.coordinates;
+          fetchElevation(combined, function(ele) {
+            routeEle = ele;
+            updateRoutePopup();
+          });
+        }
+
+        function fetchSegment(from, to, onSuccess, onError) {
+          var profile = document.getElementById('route-profile').value;
+          var url = '/v1/route/' + routeTilesId + '@' + routeTilesVer +
+            '?from=' + from[1] + ',' + from[0] +
+            '&to='   + to[1]   + ',' + to[0] +
+            '&profile=' + profile;
+          setRouteStatus('Berechne Route …');
+          fetch(url)
+            .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
+            .then(function(res) {
+              if (!res.ok) {
+                setRouteStatus('');
+                onError(res.body.error || 'Keine Route gefunden');
+                return;
+              }
+              onSuccess(res.body);
+              setRouteStatus('');
+            })
+            .catch(function() {
+              setRouteStatus('');
+              onError('Fehler bei der Routenberechnung');
+            });
+        }
+
+        function onRouteClick(e) {
+          var lngLat = [e.lngLat.lng, e.lngLat.lat];
+
+          if (routePoints.length === 0) {
+            // erster punkt: startmarker grün setzen
+            routePoints.push(lngLat);
+            placeMarker(lngLat, '#22c55e');
+            setRouteStatus('Zielpunkt klicken');
+            return;
+          }
+
+          // weiterer punkt: vorigen letzten marker auf blau umfärben, neuen rot
+          setMarkerColor(routeMarkers[routeMarkers.length - 1], '#3b82f6');
+          var newMarker = placeMarker(lngLat, '#ef4444');
+
+          var from = routePoints[routePoints.length - 1];
+          routePoints.push(lngLat);
+
+          fetchSegment(from, lngLat,
+            function(feature) {
+              // erfolg: segment übernehmen
+              routeSegments.push(feature.geometry.coordinates);
+              routeTotalKm  += feature.properties.distance_km;
+              routeTotalMin += feature.properties.duration_min;
+              addRouteLayers();
+              refreshRouteElevation();  // lädt elevation async, updateRoutePopup darin
+              setRouteStatus('Weiteren Punkt klicken oder Route-Button zum Beenden');
+            },
+            function(errMsg) {
+              // fehler: letzten punkt + marker rückgängig machen
+              routePoints.pop();
+              newMarker.remove();
+              routeMarkers.pop();
+              // vorigen marker wieder rot färben (er ist wieder der letzte)
+              if (routeMarkers.length > 1) {
+                setMarkerColor(routeMarkers[routeMarkers.length - 1], '#ef4444');
+              }
+              if (routePopup) routePopup.remove();
+              routePopup = new maplibregl.Popup({ closeOnClick: true })
+                .setLngLat(lngLat)
+                .setHTML('<span style="color:#dc2626;font-size:13px">' + errMsg + '</span>')
+                .addTo(map);
+            }
+          );
+        }
+
+        document.getElementById('route-btn').addEventListener('click', function() {
+          if (routeActive || routePoints.length > 0) {
+            clearRoute();
+          } else {
+            // Distanzmessung ggf. beenden
+            if (measureActive) stopMeasure();
+            routeActive = true;
+            this.classList.add('active');
+            document.getElementById('route-profile').style.display = '';
+            map.getCanvasContainer().classList.add('route-active');
+            map.on('click', onRouteClick);
+            setRouteStatus('Startpunkt klicken');
+          }
+        });
+
+        // Profil ändern → alle segmente neu berechnen
+        document.getElementById('route-profile').addEventListener('change', function() {
+          if (routePoints.length < 2) return;
+          var points = routePoints.slice();
+          routeSegments = [];
+          routeTotalKm  = 0;
+          routeTotalMin = 0;
+          routeEle      = null;
+          removeRouteLayers();
+          if (routePopup) { routePopup.remove(); routePopup = null; }
+
+          function fetchNext(idx) {
+            if (idx >= points.length - 1) {
+              addRouteLayers();
+              refreshRouteElevation();
+              return;
+            }
+            fetchSegment(points[idx], points[idx + 1],
+              function(feature) {
+                routeSegments.push(feature.geometry.coordinates);
+                routeTotalKm  += feature.properties.distance_km;
+                routeTotalMin += feature.properties.duration_min;
+                fetchNext(idx + 1);
+              },
+              function(errMsg) {
+                setRouteStatus('Fehler bei Segment ' + (idx + 1) + ': ' + errMsg);
+              }
+            );
+          }
+          fetchNext(0);
+        });
+        // --- Ende Routing ---
+
+        // --- Info-Picker ---
+        var infoActive = false;
+        var infoPopup  = null;
+
+        function stopInfo() {
+          infoActive = false;
+          document.getElementById('info-btn').classList.remove('active');
+          map.getCanvasContainer().classList.remove('info-active');
+          map.off('click', onInfoClick);
+        }
+
+        function onInfoClick(e) {
+          var lat = e.lngLat.lat;
+          var lon = e.lngLat.lng;
+          var dms = function(deg, pos, neg) {
+            var d = Math.abs(deg);
+            var dFloor = Math.floor(d);
+            var mAll = (d - dFloor) * 60;
+            var mFloor = Math.floor(mAll);
+            var s = ((mAll - mFloor) * 60).toFixed(2);
+            return dFloor + '° ' + mFloor + '\' ' + s + '" ' + (deg >= 0 ? pos : neg);
+          };
+          var html =
+            '<div style="font-size:13px;line-height:1.7">' +
+            '<strong>Koordinaten</strong><br>' +
+            '<span style="font-family:monospace">' + lat.toFixed(6) + ', ' + lon.toFixed(6) + '</span><br>' +
+            '<span style="color:#888;font-size:11px">' + dms(lat,'N','S') + ' &nbsp; ' + dms(lon,'E','W') + '</span>' +
+            '</div>';
+          if (infoPopup) infoPopup.remove();
+          infoPopup = new maplibregl.Popup({ closeOnClick: true, maxWidth: '280px' })
+            .setLngLat([lon, lat])
+            .setHTML(html)
+            .addTo(map);
+        }
+
+        document.getElementById('info-btn').addEventListener('click', function() {
+          if (infoActive) {
+            stopInfo();
+          } else {
+            if (measureActive) stopMeasure();
+            if (routeActive || routePoints.length > 0) clearRoute();
+            infoActive = true;
+            this.classList.add('active');
+            map.getCanvasContainer().classList.add('info-active');
+            map.on('click', onInfoClick);
+          }
+        });
+
+        // --- Ende Info-Picker ---
 
         // GPX Track entfernen
         document.getElementById('gpx-clear').addEventListener('click', function() {

@@ -81,8 +81,8 @@
         "line-join": "round"
       },
       "paint": {
-        "line-color": "#6fb3d2",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 16, 1.5]
+        "line-color": "#3a90c0",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 16, 2.5]
       }
     },
 
@@ -301,12 +301,25 @@
       }
     },
     {
+      "id": "road-tertiary-casing",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "minzoom": 11,
+      "filter": ["in", "class", "tertiary", "unclassified"],
+      "layout": {"line-cap": "butt", "line-join": "miter"},
+      "paint": {
+        "line-color": "#aaaaaa",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1.5, 14, 6]
+      }
+    },
+    {
       "id": "road-tertiary",
       "type": "line",
       "source": "openmaptiles",
       "source-layer": "transportation",
       "minzoom": 11,
-      "filter": ["==", "class", "tertiary"],
+      "filter": ["in", "class", "tertiary", "unclassified"],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
         "line-color": "#ffffff",
@@ -319,7 +332,7 @@
       "source": "openmaptiles",
       "source-layer": "transportation",
       "minzoom": 13,
-      "filter": ["in", "class", "minor", "service"],
+      "filter": ["in", "class", "minor", "service", "track"],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
         "line-color": "#ffffff",

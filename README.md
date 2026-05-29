@@ -89,11 +89,13 @@ Returns JSON capabilities indicating available optional features.
 **Response:**
 ```json
 {
-  "contours": true | false
+  "contours": true | false,
+  "routing":  true
 }
 ```
 
-Indicates whether contours.mbtiles was detected and available.
+- `contours` — whether `contours.mbtiles` was detected and loaded
+- `routing` — always `true`; indicates the `/v1/route/` endpoint is available
 
 
 ### `GET /v1/poi/{identifier}@{version}?lat={lat}&lon={lon}&category={category}&radius={radius}`
@@ -218,6 +220,70 @@ Returns merged glyph data in Protocol Buffer format for font rendering.
 **Response:** `application/vnd.google.protobuf`
 - Gzip-compressed if client sends `Accept-Encoding: gzip`
 - Merges glyphs from all fonts in stack, deduplicating by glyph ID
+
+
+### `GET /v1/route/{identifier}@{version}?from={lat},{lon}&to={lat},{lon}&profile={profile}`
+
+Compute a walking or cycling route between two coordinates using the vector tile road network.
+No external routing engine required — routing is performed entirely server-side from the MBTiles data.
+
+**Path Parameters:**
+- `identifier` — Tileset identifier (same as used for `/v1/tiles/`)
+- `version` — Tileset version
+
+**Query Parameters:**
+- `from` — Start point as `lat,lon` (required)
+- `to` — End point as `lat,lon` (required)
+- `profile` — Routing profile: `foot` (default) or `bike`
+
+**Example:**
+```
+GET /v1/route/mytiles@1.0.0?from=48.137,11.575&to=48.155,11.602&profile=foot
+```
+
+**Response:** GeoJSON Feature with LineString geometry
+```json
+{
+  "type": "Feature",
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [[11.575, 48.137], ...]
+  },
+  "properties": {
+    "distance_km":  3.241,
+    "duration_min": 43.2,
+    "profile":      "foot",
+    "tiles_loaded": 36,
+    "nodes":        12847
+  }
+}
+```
+
+**Profile weights** (OpenMapTiles `transportation` layer `class` attribute):
+
+| Road class | `foot` | `bike` |
+|---|---|---|
+| `footway`, `path`, `pedestrian` | preferred (1.0) | not passable |
+| `cycleway` | allowed (1.3) | preferred (1.0) |
+| `track` | 1.1 | 1.2 |
+| `residential`, `living_street` | 1.2–1.3 | 1.1 |
+| `tertiary` | 1.8 | 1.4 |
+| `secondary` | 2.5 | 1.6 |
+| `primary` | not passable | 2.5 |
+| `motorway`, `trunk` | not passable | not passable |
+| `steps` | 1.2 | not passable |
+
+**Duration estimate:** 4.5 km/h for `foot`, 15 km/h for `bike`.
+
+**Limits:**
+- Maximum bounding box: 500 tiles at zoom 14 (~30 km routes)
+- Start and end points must be within 500 m of a routable road
+- No turn restrictions (OSM relations are not stored in vector tiles)
+- Graph is built fresh per request (no caching); expect 0.5–3 s for 10–30 km routes
+
+**Error responses:**
+- `400` — invalid parameters or bounding box too large
+- `404` — no road network in area, or no route found between the two points
 
 
 ### `GET /v1/static/{identifier}@{version}/{file}`

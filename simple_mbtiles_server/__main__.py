@@ -4,6 +4,7 @@ from gevent import (
 monkey.patch_all()
 
 from contextlib import ExitStack, contextmanager
+import heapq
 import itertools
 import json
 import logging
@@ -285,6 +286,387 @@ def _parse_mvt_poi(raw_tile, tile_x, tile_y, zoom, category):
             pos += 8
 
     return features
+
+
+# ---------------------------------------------------------------------------
+# Routing helpers
+# ---------------------------------------------------------------------------
+
+# OpenMapTiles transportation class weights per profile.
+# Factor multiplied with haversine distance → weighted cost.
+# None = not passable for this profile.
+_ROUTING_PROFILES = {
+    'foot': {
+        'footway':       1.0,
+        'path':          1.0,
+        'pedestrian':    1.0,
+        'steps':         1.2,
+        'track':         1.1,
+        'living_street': 1.2,
+        'residential':   1.3,
+        'service':       1.4,
+        'minor':         1.5,
+        'tertiary':      1.8,
+        'secondary':     2.5,
+        'cycleway':      1.3,
+        'primary':       None,
+        'trunk':         None,
+        'motorway':      None,
+        'rail':          None,
+        'transit':       None,
+        'aerialway':     None,
+        'ferry':         None,
+    },
+    'bike': {
+        'cycleway':      1.0,
+        'path':          1.1,
+        'track':         1.2,
+        'living_street': 1.1,
+        'residential':   1.1,
+        'service':       1.3,
+        'minor':         1.3,
+        'tertiary':      1.4,
+        'secondary':     1.6,
+        'primary':       2.5,
+        'pedestrian':    1.5,
+        'trunk':         None,
+        'motorway':      None,
+        'footway':       None,
+        'steps':         None,
+        'rail':          None,
+        'transit':       None,
+        'aerialway':     None,
+        'ferry':         None,
+    },
+}
+
+# Average travel speeds used for duration estimate.
+_PROFILE_SPEED_KMH = {'foot': 4.5, 'bike': 15.0}
+
+
+def _haversine(lon1, lat1, lon2, lat2):
+    """Return great-circle distance in km."""
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
+    """
+    Decode MVT geometry command sequence.
+    Returns list of lines; each line is a list of [lon, lat] pairs.
+    """
+    n = 2 ** zoom
+    cursor_x = cursor_y = 0
+    lines = []
+    current_line = []
+    i = 0
+    while i < len(geometry):
+        cmd_int = geometry[i]; i += 1
+        cmd_id = cmd_int & 7
+        count = cmd_int >> 3
+        if cmd_id == 1:  # MoveTo
+            if current_line:
+                lines.append(current_line)
+                current_line = []
+            for _ in range(count):
+                if i + 1 >= len(geometry):
+                    break
+                cursor_x += _zigzag(geometry[i]); i += 1
+                cursor_y += _zigzag(geometry[i]); i += 1
+                lon = ((tile_x + cursor_x / extent) / n) * 360.0 - 180.0
+                lat = math.degrees(math.atan(math.sinh(
+                    math.pi * (1.0 - 2.0 * (tile_y + cursor_y / extent) / n)
+                )))
+                current_line.append([round(lon, 6), round(lat, 6)])
+        elif cmd_id == 2:  # LineTo
+            for _ in range(count):
+                if i + 1 >= len(geometry):
+                    break
+                cursor_x += _zigzag(geometry[i]); i += 1
+                cursor_y += _zigzag(geometry[i]); i += 1
+                lon = ((tile_x + cursor_x / extent) / n) * 360.0 - 180.0
+                lat = math.degrees(math.atan(math.sinh(
+                    math.pi * (1.0 - 2.0 * (tile_y + cursor_y / extent) / n)
+                )))
+                current_line.append([round(lon, 6), round(lat, 6)])
+        elif cmd_id == 7:  # ClosePath
+            if current_line:
+                current_line.append(current_line[0])
+                lines.append(current_line)
+                current_line = []
+        else:
+            break
+    if current_line:
+        lines.append(current_line)
+    return lines
+
+
+def _extract_road_segments(raw_tile, tile_x, tile_y, zoom, profile):
+    """
+    Parse a raw MVT blob, extract transportation layer segments passable for
+    the given profile. Returns list of (node_a, node_b, weighted_dist, [c_a, c_b]).
+    node_a/node_b are (lon, lat) tuples rounded to 5 decimal places (~1 m).
+    """
+    weights = _ROUTING_PROFILES.get(profile, _ROUTING_PROFILES['foot'])
+
+    try:
+        data = zlib.decompress(raw_tile, wbits=32 + zlib.MAX_WBITS)
+    except Exception:
+        data = raw_tile
+
+    segments = []
+    pos = 0
+
+    while pos < len(data):
+        try:
+            tag, pos = _varint(data, pos)
+        except IndexError:
+            break
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 2:
+            try:
+                length, pos = _varint(data, pos)
+            except IndexError:
+                break
+            chunk = data[pos:pos + length]; pos += length
+            if field != 3:  # not a Tile.Layer
+                continue
+            layer_name, keys, values, raw_features, extent = _parse_mvt_layer(chunk)
+            if layer_name != 'transportation':
+                continue
+            for rf in raw_features:
+                tags, geom_type, geometry = _parse_mvt_feature(rf)
+                if geom_type != 2:  # LineString only
+                    continue
+                props = {}
+                for ki in range(0, len(tags) - 1, 2):
+                    k, v = tags[ki], tags[ki + 1]
+                    if k < len(keys) and v < len(values):
+                        props[keys[k]] = values[v]
+                factor = weights.get(props.get('class', ''))
+                if factor is None:
+                    continue
+                for coords in _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
+                    for j in range(len(coords) - 1):
+                        a, b = coords[j], coords[j + 1]
+                        node_a = (round(a[0], 5), round(a[1], 5))
+                        node_b = (round(b[0], 5), round(b[1], 5))
+                        if node_a == node_b:
+                            continue
+                        dist = _haversine(a[0], a[1], b[0], b[1]) * factor
+                        segments.append((node_a, node_b, dist))
+        elif wire == 0:
+            try:
+                _, pos = _varint(data, pos)
+            except IndexError:
+                break
+        elif wire == 5:
+            pos += 4
+        elif wire == 1:
+            pos += 8
+
+    return segments
+
+
+def _extract_contour_lines(raw_tile, tile_x, tile_y, zoom):
+    """
+    Parse a raw MVT blob, extract contour layer LineStrings with their elevation.
+    Returns list of (ele: int, coords: [[lon, lat], ...]) for every contour segment.
+    """
+    try:
+        data = zlib.decompress(raw_tile, wbits=32 + zlib.MAX_WBITS)
+    except Exception:
+        data = raw_tile
+
+    results = []
+    pos = 0
+
+    while pos < len(data):
+        try:
+            tag, pos = _varint(data, pos)
+        except IndexError:
+            break
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 2:
+            try:
+                length, pos = _varint(data, pos)
+            except IndexError:
+                break
+            chunk = data[pos:pos + length]; pos += length
+            if field != 3:  # not a Tile.Layer
+                continue
+            layer_name, keys, values, raw_features, extent = _parse_mvt_layer(chunk)
+            if layer_name != 'contours':
+                continue
+            for rf in raw_features:
+                tags, geom_type, geometry = _parse_mvt_feature(rf)
+                if geom_type != 2:  # LineString only
+                    continue
+                props = {}
+                for ki in range(0, len(tags) - 1, 2):
+                    k, v = tags[ki], tags[ki + 1]
+                    if k < len(keys) and v < len(values):
+                        props[keys[k]] = values[v]
+                ele = props.get('ele')
+                if ele is None:
+                    continue
+                try:
+                    ele = int(ele)
+                except (ValueError, TypeError):
+                    continue
+                for coords in _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
+                    if len(coords) >= 2:
+                        results.append((ele, coords))
+        elif wire == 0:
+            try:
+                _, pos = _varint(data, pos)
+            except IndexError:
+                break
+        elif wire == 5:
+            pos += 4
+        elif wire == 1:
+            pos += 8
+
+    return results
+
+
+def _seg_intersect(p1, p2, p3, p4):
+    """
+    Test whether segment p1→p2 intersects segment p3→p4.
+    Returns the interpolation parameter t along p1→p2 (0..1) if intersecting, else None.
+    Uses 2-D planar arithmetic (valid for short segments in lon/lat space).
+    """
+    d1x = p2[0] - p1[0]; d1y = p2[1] - p1[1]
+    d2x = p4[0] - p3[0]; d2y = p4[1] - p3[1]
+    denom = d1x * d2y - d1y * d2x
+    if abs(denom) < 1e-12:
+        return None  # parallel / collinear
+    dx = p3[0] - p1[0]; dy = p3[1] - p1[1]
+    t = (dx * d2y - dy * d2x) / denom
+    u = (dx * d1y - dy * d1x) / denom
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return t
+    return None
+
+
+def _elevation_profile(path_coords, contour_lines):
+    """
+    Estimate ascent and descent along path_coords by intersecting with contour lines.
+
+    For each path segment we collect every contour crossing (ele value + position t
+    along the segment).  We then sort all crossings by their cumulative position and
+    sum up the signed ele-differences → ascent (m) and descent (m, positive value).
+    """
+    # gather all crossings: (cumulative_distance, ele)
+    crossings = []
+    cum = 0.0
+
+    for si in range(len(path_coords) - 1):
+        a = path_coords[si]
+        b = path_coords[si + 1]
+        seg_len = _haversine(a[0], a[1], b[0], b[1])
+
+        seg_crossings = []
+        for ele, contour_coords in contour_lines:
+            for ci in range(len(contour_coords) - 1):
+                c = contour_coords[ci]
+                d = contour_coords[ci + 1]
+                t = _seg_intersect(a, b, c, d)
+                if t is not None:
+                    seg_crossings.append((t, ele))
+
+        # deduplicate very close crossings (same ele within tiny t-distance)
+        seg_crossings.sort()
+        deduped = []
+        for t, ele in seg_crossings:
+            if deduped and abs(t - deduped[-1][0]) < 1e-6 and ele == deduped[-1][1]:
+                continue
+            deduped.append((t, ele))
+
+        for t, ele in deduped:
+            crossings.append((cum + t * seg_len, ele))
+
+        cum += seg_len
+
+    if len(crossings) < 2:
+        return 0, 0
+
+    crossings.sort()
+    ascent = 0
+    descent = 0
+    for i in range(1, len(crossings)):
+        diff = crossings[i][1] - crossings[i - 1][1]
+        if diff > 0:
+            ascent += diff
+        else:
+            descent += -diff
+
+    return int(ascent), int(descent)
+
+
+def _build_graph(all_segments):
+    """Build bidirectional adjacency graph: node → [(neighbor, weighted_dist)]."""
+    graph = {}
+    for node_a, node_b, dist in all_segments:
+        graph.setdefault(node_a, []).append((node_b, dist))
+        graph.setdefault(node_b, []).append((node_a, dist))
+    return graph
+
+
+def _nearest_node(graph, lon, lat):
+    """Linear scan for the closest graph node to (lon, lat). Returns (key, dist_km)."""
+    best_key = None
+    best_dist = float('inf')
+    for key in graph:
+        d = _haversine(lon, lat, key[0], key[1])
+        if d < best_dist:
+            best_dist = d
+            best_key = key
+    return best_key, best_dist
+
+
+def _astar_route(graph, start, end):
+    """
+    A* shortest path. Returns (coords, weighted_cost) or (None, None).
+    coords is a list of [lon, lat] pairs forming the route.
+    """
+    def h(node):
+        return _haversine(node[0], node[1], end[0], end[1])
+
+    open_set = [(h(start), 0.0, start)]
+    came_from = {}
+    g_score = {start: 0.0}
+
+    while open_set:
+        _, g, current = heapq.heappop(open_set)
+
+        if g > g_score.get(current, float('inf')):
+            continue
+
+        if current == end:
+            path = []
+            node = end
+            while node in came_from:
+                path.append(node)
+                node = came_from[node]
+            path.append(start)
+            path.reverse()
+            return [[n[0], n[1]] for n in path], g_score[end]
+
+        for neighbor, dist in graph.get(current, []):
+            new_g = g + dist
+            if new_g < g_score.get(neighbor, float('inf')):
+                g_score[neighbor] = new_g
+                came_from[neighbor] = current
+                heapq.heappush(open_set, (new_g + h(neighbor), new_g, neighbor))
+
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -664,12 +1046,173 @@ def simple_mbtiles_server(
         return Response(status=200, content_type=static_dict['mime'],
                         response=static_dict['bytes'])
 
+    def get_route(identifier, version):
+        try:
+            from_str = request.args['from']
+            to_str   = request.args['to']
+            profile  = request.args.get('profile', 'foot')
+            from_lat, from_lon = map(float, from_str.split(','))
+            to_lat,   to_lon   = map(float, to_str.split(','))
+        except (KeyError, ValueError):
+            return Response(status=400, content_type='application/json',
+                            response=json.dumps({'error': 'invalid parameters; expected from=lat,lon&to=lat,lon&profile=foot|bike'}))
+
+        if profile not in _ROUTING_PROFILES:
+            return Response(status=400, content_type='application/json',
+                            response=json.dumps({'error': f'unknown profile "{profile}"; use foot or bike'}))
+
+        try:
+            db_connection = mbtiles_dict[(identifier, version)]['db_connection']
+        except KeyError:
+            return Response(status=404)
+
+        zoom = 14
+
+        # Bounding box of start+end with 30% buffer (min ~1 km each side).
+        min_lat = min(from_lat, to_lat)
+        max_lat = max(from_lat, to_lat)
+        min_lon = min(from_lon, to_lon)
+        max_lon = max(from_lon, to_lon)
+
+        buf_lat = max((max_lat - min_lat) * 0.3, 0.009)   # ~1 km
+        buf_lon = max((max_lon - min_lon) * 0.3, 0.013)
+
+        x0, y1 = _lat_lon_to_tile(min_lat - buf_lat, min_lon - buf_lon, zoom)
+        x1, y0 = _lat_lon_to_tile(max_lat + buf_lat, max_lon + buf_lon, zoom)
+
+        tile_count = (x1 - x0 + 1) * (y1 - y0 + 1)
+        if tile_count > 500:
+            return Response(status=400, content_type='application/json',
+                            response=json.dumps({'error': f'bounding box too large ({tile_count} tiles); keep routes under ~30 km'}))
+
+        # Parse transportation segments from every tile in the bbox.
+        cursor = db_connection.cursor()
+        all_segments = []
+        for tx in range(x0, x1 + 1):
+            for ty in range(y0, y1 + 1):
+                y_tms = (2 ** zoom - 1) - ty
+                cursor.execute(sql, (zoom, tx, y_tms))
+                row = cursor.fetchone()
+                if row:
+                    all_segments.extend(_extract_road_segments(row[0], tx, ty, zoom, profile))
+        cursor.close()
+
+        if not all_segments:
+            return Response(status=404, content_type='application/json',
+                            response=json.dumps({'error': 'no road network found in area'}))
+
+        graph = _build_graph(all_segments)
+
+        start_node, start_snap_km = _nearest_node(graph, from_lon, from_lat)
+        end_node,   end_snap_km   = _nearest_node(graph, to_lon,   to_lat)
+
+        if start_snap_km > 0.5:
+            return Response(status=404, content_type='application/json',
+                            response=json.dumps({'error': f'no road within 500 m of start point (closest: {start_snap_km*1000:.0f} m)'}))
+        if end_snap_km > 0.5:
+            return Response(status=404, content_type='application/json',
+                            response=json.dumps({'error': f'no road within 500 m of end point (closest: {end_snap_km*1000:.0f} m)'}))
+
+        if start_node == end_node:
+            return Response(status=400, content_type='application/json',
+                            response=json.dumps({'error': 'start and end snap to the same node'}))
+
+        path_coords, _ = _astar_route(graph, start_node, end_node)
+
+        if path_coords is None:
+            return Response(status=404, content_type='application/json',
+                            response=json.dumps({'error': 'no route found between the two points'}))
+
+        dist_km = sum(
+            _haversine(path_coords[i][0], path_coords[i][1],
+                       path_coords[i + 1][0], path_coords[i + 1][1])
+            for i in range(len(path_coords) - 1)
+        )
+        speed = _PROFILE_SPEED_KMH.get(profile, 4.5)
+
+        result = {
+            'type': 'Feature',
+            'geometry': {'type': 'LineString', 'coordinates': path_coords},
+            'properties': {
+                'distance_km':  round(dist_km, 3),
+                'duration_min': round(dist_km / speed * 60, 1),
+                'profile':      profile,
+                'tiles_loaded': tile_count,
+                'nodes':        len(graph),
+            },
+        }
+        return Response(status=200, content_type='application/json', response=json.dumps(result))
+
+    def get_elevation(identifier, version):
+        """
+        POST /v1/elevation/<id>@<ver>
+        Body: {"coordinates": [[lon, lat], ...]}
+        Returns: {"ascent_m": <int>, "descent_m": <int>}
+
+        Computes ascent/descent by intersecting the given LineString with
+        contour lines from contours.mbtiles (zoom 14).  Only available when
+        contours.mbtiles is loaded.
+        """
+        if not contours_dict:
+            return Response(status=404, content_type='application/json',
+                            response=json.dumps({'error': 'no contours available'}))
+
+        try:
+            body = request.get_json(force=True, silent=True) or {}
+            coords = body.get('coordinates', [])
+            if len(coords) < 2:
+                raise ValueError('need at least 2 coordinates')
+            # validate
+            coords = [[float(c[0]), float(c[1])] for c in coords]
+        except Exception as exc:
+            return Response(status=400, content_type='application/json',
+                            response=json.dumps({'error': f'invalid body: {exc}'}))
+
+        zoom = 14
+
+        lons = [c[0] for c in coords]
+        lats = [c[1] for c in coords]
+        min_lon, max_lon = min(lons), max(lons)
+        min_lat, max_lat = min(lats), max(lats)
+
+        buf_lat = max((max_lat - min_lat) * 0.05, 0.002)
+        buf_lon = max((max_lon - min_lon) * 0.05, 0.003)
+
+        x0, y1 = _lat_lon_to_tile(min_lat - buf_lat, min_lon - buf_lon, zoom)
+        x1, y0 = _lat_lon_to_tile(max_lat + buf_lat, max_lon + buf_lon, zoom)
+
+        tile_count = (x1 - x0 + 1) * (y1 - y0 + 1)
+        if tile_count > 500:
+            return Response(status=400, content_type='application/json',
+                            response=json.dumps({'error': f'area too large ({tile_count} tiles)'}))
+
+        cursor = contours_dict['db_connection'].cursor()
+        sql = 'SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?'
+        all_contours = []
+        for tx in range(x0, x1 + 1):
+            for ty in range(y0, y1 + 1):
+                y_tms = (2 ** zoom - 1) - ty
+                cursor.execute(sql, (zoom, tx, y_tms))
+                row = cursor.fetchone()
+                if row:
+                    all_contours.extend(_extract_contour_lines(row[0], tx, ty, zoom))
+        cursor.close()
+
+        if not all_contours:
+            return Response(status=200, content_type='application/json',
+                            response=json.dumps({'ascent_m': 0, 'descent_m': 0}))
+
+        ascent, descent = _elevation_profile(coords, all_contours)
+        return Response(status=200, content_type='application/json',
+                        response=json.dumps({'ascent_m': ascent, 'descent_m': descent}))
+
     def get_index():
         return send_from_directory(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'vendor'), 'index.html')
 
     def get_capabilities():
         return Response(status=200, content_type='application/json', response=json.dumps({
             'contours': bool(contours_dict),
+            'routing':  True,
         }))
 
     def get_poi(identifier, version):
@@ -728,6 +1271,13 @@ def simple_mbtiles_server(
     app.add_url_rule(
         '/v1/poi/<string:identifier>@<string:version>',
         view_func=get_poi)
+    app.add_url_rule(
+        '/v1/route/<string:identifier>@<string:version>',
+        view_func=get_route)
+    app.add_url_rule(
+        '/v1/elevation/<string:identifier>@<string:version>',
+        view_func=get_elevation,
+        methods=['POST'])
 
     app.add_url_rule(
         '/v1/tiles/<string:identifier>@<string:version>/<int:z>/<int:x>/<int:y>.mvt',

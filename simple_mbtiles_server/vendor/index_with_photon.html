@@ -164,6 +164,29 @@
         padding: 0 4px;
       }
       .maplibregl-canvas-container.measure-active { cursor: crosshair !important; }
+      #route-btn.active {
+        background: #2563eb;
+        color: white;
+        border-color: #1d4ed8;
+      }
+      #route-profile {
+        display: none;
+      }
+      #route-status {
+        font-size: 13px;
+        color: #2563eb;
+        font-weight: bold;
+        white-space: nowrap;
+        padding: 0 4px;
+        display: none;
+      }
+      .maplibregl-canvas-container.route-active { cursor: crosshair !important; }
+      #info-btn.active {
+        background: #6d28d9;
+        color: white;
+        border-color: #5b21b6;
+      }
+      .maplibregl-canvas-container.info-active { cursor: crosshair !important; }
       #view-search-toggle {
         display: flex;
         align-items: center;
@@ -258,7 +281,7 @@
         }
         .tb-dot.active { background: #555; }
         .toolbar-btn, #style-select, #view-search-toggle,
-        #contour-toggle, #measure-btn, #gpx-clear {
+        #contour-toggle, #measure-btn, #gpx-clear, #route-btn, #route-profile {
           min-height: 36px;
           font-size: 14px;
         }
@@ -374,12 +397,19 @@
               <div id="zoom-badge">1</div>
             </div>
           </div>
-          <!-- Seite 2: Track & Messen -->
+          <!-- Seite 2: Track & Messen & Route -->
           <div class="tb-page" id="tb-page-2">
             <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
             <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
             <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
             <span id="measure-result" style="display:none"></span>
+            <button id="info-btn" class="toolbar-btn" title="Punkt-Info: Klick auf Karte zeigt Koordinaten und Adresse">📍 Info</button>
+            <button id="route-btn" class="toolbar-btn" title="Route berechnen (Fuß / Fahrrad)">🔀 Route</button>
+            <select id="route-profile" class="toolbar-btn">
+              <option value="foot">Fuß</option>
+              <option value="bike">Fahrrad</option>
+            </select>
+            <span id="route-status"></span>
           </div>
           <div id="tb-indicator">
             <span class="tb-dot active"></span>
@@ -533,6 +563,21 @@
       document.getElementById('contour-checkbox').addEventListener('change', function() {
         contoursVisible = this.checked;
         applyContourVisibility();
+        // Höhenmeter nachladen oder ausblenden je nach Toggle-Zustand
+        if (measurePoints && measurePoints.length >= 2) {
+          var distText = formatDist(measureTotalDist());
+          var res = document.getElementById('measure-result');
+          res.innerHTML = distText;
+          fetchElevation(measurePoints, function(ele) { res.innerHTML = distText + eleHtml(ele); });
+          if (measurePopup) {
+            var dh = '<strong>' + distText + '</strong>';
+            measurePopup.setHTML(dh);
+            fetchElevation(measurePoints, function(ele) { if (measurePopup) measurePopup.setHTML(dh + eleHtml(ele)); });
+          }
+        }
+        if (routeSegments && routeSegments.length > 0) {
+          refreshRouteElevation();
+        }
       });
 
 
@@ -696,7 +741,11 @@
           var res = document.getElementById('measure-result');
           if (measurePoints.length >= 2) {
             res.style.display = '';
-            res.textContent = formatDist(measureTotalDist());
+            var distText = formatDist(measureTotalDist());
+            res.innerHTML = distText;
+            fetchElevation(measurePoints, function(ele) {
+              res.innerHTML = distText + eleHtml(ele);
+            });
           } else {
             res.style.display = 'none';
           }
@@ -730,11 +779,16 @@
           map.off('dblclick', onMeasureDblClick);
           if (measurePoints.length >= 2) {
             var last = measurePoints[measurePoints.length - 1];
+            var distHtml = '<strong>' + formatDist(measureTotalDist()) + '</strong>';
             if (measurePopup) measurePopup.remove();
             measurePopup = new maplibregl.Popup({ closeOnClick: false, className: 'measure-popup' })
               .setLngLat(last)
-              .setHTML('<strong>' + formatDist(measureTotalDist()) + '</strong>')
+              .setHTML(distHtml)
               .addTo(map);
+            var pts = measurePoints.slice();
+            fetchElevation(pts, function(ele) {
+              if (measurePopup) measurePopup.setHTML(distHtml + eleHtml(ele));
+            });
           }
         }
 
@@ -751,8 +805,16 @@
         }
 
         document.getElementById('measure-btn').addEventListener('click', function() {
-          if (measureActive) {
-            stopMeasure();
+          if (measureActive || measurePoints.length > 0) {
+            // aktiv oder messung vorhanden → alles zurücksetzen
+            if (measureActive) {
+              measureActive = false;
+              this.classList.remove('active');
+              map.getCanvasContainer().classList.remove('measure-active');
+              map.off('click', onMeasureClick);
+              map.off('dblclick', onMeasureDblClick);
+            }
+            clearMeasure();
           } else {
             clearMeasure();
             measureActive = true;
@@ -765,7 +827,11 @@
         });
 
         document.addEventListener('keydown', function(e) {
-          if (e.key === 'Escape' && measureActive) stopMeasure();
+          if (e.key === 'Escape') {
+            if (measureActive) stopMeasure();
+            if (routeActive || routePoints.length > 0) clearRoute();
+            if (infoActive) stopInfo();
+          }
         });
 
         map.on('style.load', function() {
@@ -773,6 +839,7 @@
             addMeasureSources();
             updateMeasureLayers();
           }
+          if (routeSegments.length > 0) addRouteLayers();
         });
         // --- Ende Distanzmessung ---
 
@@ -811,41 +878,42 @@
         var activePoiCategory = null;
 
         // OpenMapTiles POI-Klassen je Kategorie
+        // color: Hintergrundfarbe des Markers, icon: Emoji-Zeichen
         var POI_CATEGORIES = {
           supermarket: {
-            title: 'Lebensmittel',
+            title: 'Lebensmittel', color: '#16a34a', icon: '🛒',
             match: function(p) {
               return ['supermarket','convenience','grocery','food'].indexOf(p.subclass) !== -1
                   || ['supermarket','convenience','grocery'].indexOf(p.class) !== -1;
             }
           },
           pharmacy: {
-            title: 'Apotheke',
+            title: 'Apotheke', color: '#dc2626', icon: '💊',
             match: function(p) {
               return p.subclass === 'pharmacy' || p.class === 'pharmacy';
             }
           },
           hospital: {
-            title: 'Krankenhaus / Arzt',
+            title: 'Krankenhaus / Arzt', color: '#b91c1c', icon: '🏥',
             match: function(p) {
               return ['hospital','clinic','doctors','dentist'].indexOf(p.subclass) !== -1
                   || p.class === 'hospital';
             }
           },
           fuel: {
-            title: 'Tankstelle',
+            title: 'Tankstelle', color: '#d97706', icon: '⛽',
             match: function(p) {
               return p.subclass === 'fuel' || p.class === 'fuel';
             }
           },
           charging_station: {
-            title: 'Ladesäule',
+            title: 'Ladesäule', color: '#0891b2', icon: '⚡',
             match: function(p) {
               return p.subclass === 'charging_station' || p.class === 'charging_station';
             }
           },
           alpine_hut: {
-            title: 'Schutzhütte / Camping',
+            title: 'Schutzhütte / Camping', color: '#92400e', icon: '🏕️',
             match: function(p) {
               return ['alpine_hut','wilderness_hut','shelter','lean_to','basic_hut','camp_site'].indexOf(p.subclass) !== -1
                   || ['shelter','accommodation','campsite'].indexOf(p.class) !== -1;
@@ -878,11 +946,32 @@
           poiMarkers = [];
         }
 
-        function _addPoiMarker(f, catTitle) {
-          var p = f.properties || {};
-          var name = p.name || p['name:de'] || p['name:latin'] || catTitle;
+        function _makePoiMarkerEl(cat) {
+          // Runder farbiger Pin mit Emoji-Icon
+          var el = document.createElement('div');
+          el.title = cat.title;
+          el.style.cssText = [
+            'width:32px', 'height:32px', 'border-radius:50% 50% 50% 0',
+            'transform:rotate(-45deg)',
+            'background:' + cat.color,
+            'border:2px solid rgba(0,0,0,0.25)',
+            'box-shadow:0 2px 6px rgba(0,0,0,0.4)',
+            'display:flex', 'align-items:center', 'justify-content:center',
+            'cursor:pointer'
+          ].join(';');
+          var inner = document.createElement('span');
+          inner.style.cssText = 'transform:rotate(45deg);font-size:15px;line-height:1;display:block';
+          inner.textContent = cat.icon;
+          el.appendChild(inner);
+          return el;
+        }
+
+        function _addPoiMarker(f, category) {
+          var cat    = POI_CATEGORIES[category] || { title: category, color: '#1060b0', icon: '📍' };
+          var p      = f.properties || {};
+          var name   = p.name || p['name:de'] || p['name:latin'] || cat.title;
           var coords = f.geometry.coordinates;
-          var popup = new maplibregl.Popup({ offset: 12, closeOnClick: false })
+          var popup  = new maplibregl.Popup({ offset: [0, -28], closeOnClick: false })
             .setHTML(poiPopupHtml(name, p.subclass, null));
           // Adresse lazy via Photon Reverse nachladen
           popup.on('open', function() {
@@ -897,7 +986,7 @@
               })
               .catch(function() {});
           });
-          var m = new maplibregl.Marker({ color: '#1060b0' })
+          var m = new maplibregl.Marker({ element: _makePoiMarkerEl(cat), anchor: 'bottom-left' })
             .setLngLat(coords)
             .setPopup(popup)
             .addTo(map);
@@ -936,7 +1025,7 @@
                 setTimeout(function() { info.remove(); }, 3000);
                 return;
               }
-              geojson.features.forEach(function(f) { _addPoiMarker(f, cat.title); });
+              geojson.features.forEach(function(f) { _addPoiMarker(f, category); });
             })
             .catch(function() {
               if (activeBtn) activeBtn.textContent = origLabel;
@@ -987,6 +1076,332 @@
           }
         });
         // --- Ende POI-Suche ---
+
+        // --- Routing ---
+        var routeActive    = false;
+        var routePoints    = [];    // array von [lon,lat] — alle gesetzten wegpunkte
+        var routeSegments  = [];    // array von GeoJSON-LineString-koordinaten-arrays (je segment)
+        var routeTotalKm   = 0;
+        var routeTotalMin  = 0;
+        var routeEle       = null;  // {ascent_m, descent_m} oder null
+        var routeMarkers   = [];    // maplibregl.Marker instanzen (parallel zu routePoints)
+        var routePopup     = null;
+
+        // --- Höhenmeter-Helper ---
+        function fetchElevation(coords, cb) {
+          if (!contoursVisible || !contoursAvailable) { cb(null); return; }
+          var parts = poiTilesId.split('@');
+          var tId = parts[0]; var tVer = parts[1] || '1.0.0';
+          fetch('/v1/elevation/' + tId + '@' + tVer, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coordinates: coords })
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(j) { cb(j.ascent_m != null ? j : null); })
+            .catch(function() { cb(null); });
+        }
+
+        function eleHtml(ele) {
+          if (!ele) return '';
+          return ' &nbsp;·&nbsp; <span style="font-size:12px">↑ ~' + ele.ascent_m + ' m &nbsp;↓ ~' + ele.descent_m + ' m</span>';
+        }
+        // --- Ende Höhenmeter-Helper ---
+
+        function setRouteStatus(msg) {
+          var el = document.getElementById('route-status');
+          el.textContent = msg;
+          el.style.display = msg ? '' : 'none';
+        }
+
+        function combinedGeojson() {
+          var coords = [];
+          routeSegments.forEach(function(seg) {
+            if (coords.length === 0) {
+              coords = coords.concat(seg);
+            } else {
+              coords = coords.concat(seg.slice(1));
+            }
+          });
+          return { type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} };
+        }
+
+        function addRouteLayers() {
+          if (routeSegments.length === 0) return;
+          var data = combinedGeojson();
+          if (!map.getSource('route-line')) {
+            map.addSource('route-line', { type: 'geojson', data: data });
+            map.addLayer({ id: 'route-casing', type: 'line', source: 'route-line',
+              paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.8 } });
+            map.addLayer({ id: 'route-line', type: 'line', source: 'route-line',
+              paint: { 'line-color': '#3b82f6', 'line-width': 5 } });
+          } else {
+            map.getSource('route-line').setData(data);
+          }
+        }
+
+        function removeRouteLayers() {
+          ['route-line', 'route-casing'].forEach(function(id) {
+            if (map.getLayer(id)) map.removeLayer(id);
+          });
+          if (map.getSource('route-line')) map.removeSource('route-line');
+        }
+
+        function setMarkerColor(marker, color) {
+          marker.getElement().style.background = color;
+        }
+
+        function clearRoute() {
+          routeActive   = false;
+          routePoints   = [];
+          routeSegments = [];
+          routeTotalKm  = 0;
+          routeTotalMin = 0;
+          routeEle      = null;
+          document.getElementById('route-btn').classList.remove('active');
+          document.getElementById('route-profile').style.display = 'none';
+          map.getCanvasContainer().classList.remove('route-active');
+          map.off('click', onRouteClick);
+          routeMarkers.forEach(function(m) { m.remove(); });
+          routeMarkers = [];
+          if (routePopup) { routePopup.remove(); routePopup = null; }
+          removeRouteLayers();
+          setRouteStatus('');
+        }
+
+        function placeRouteMarker(lngLat, color) {
+          var el = document.createElement('div');
+          el.style.cssText = 'width:14px;height:14px;border-radius:50%;background:' + color +
+            ';border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);';
+          var m = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+          routeMarkers.push(m);
+          return m;
+        }
+
+        function updateRoutePopup() {
+          var lastPt = routePoints[routePoints.length - 1];
+          if (routePopup) routePopup.remove();
+          routePopup = new maplibregl.Popup({ closeOnClick: false })
+            .setLngLat(lastPt)
+            .setHTML('<strong style="font-size:14px">' + routeTotalKm.toFixed(1) + ' km</strong>' +
+              ' &nbsp;·&nbsp; <span style="font-size:13px">~' + Math.round(routeTotalMin) + ' min</span>' +
+              eleHtml(routeEle))
+            .addTo(map);
+        }
+
+        function refreshRouteElevation() {
+          if (routeSegments.length === 0) return;
+          var combined = combinedGeojson().geometry.coordinates;
+          fetchElevation(combined, function(ele) {
+            routeEle = ele;
+            updateRoutePopup();
+          });
+        }
+
+        function fetchSegment(from, to, onSuccess, onError) {
+          var parts = poiTilesId.split('@');
+          var tId = parts[0];
+          var tVer = parts[1] || '1.0.0';
+          var profile = document.getElementById('route-profile').value;
+          var url = '/v1/route/' + tId + '@' + tVer +
+            '?from=' + from[1] + ',' + from[0] +
+            '&to='   + to[1]   + ',' + to[0] +
+            '&profile=' + profile;
+          setRouteStatus('Berechne Route …');
+          fetch(url)
+            .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
+            .then(function(res) {
+              if (!res.ok) {
+                setRouteStatus('');
+                onError(res.body.error || 'Keine Route gefunden');
+                return;
+              }
+              onSuccess(res.body);
+              setRouteStatus('');
+            })
+            .catch(function() {
+              setRouteStatus('');
+              onError('Fehler bei der Routenberechnung');
+            });
+        }
+
+        function onRouteClick(e) {
+          var lngLat = [e.lngLat.lng, e.lngLat.lat];
+
+          if (routePoints.length === 0) {
+            routePoints.push(lngLat);
+            placeRouteMarker(lngLat, '#22c55e');
+            setRouteStatus('Zielpunkt klicken');
+            return;
+          }
+
+          setMarkerColor(routeMarkers[routeMarkers.length - 1], '#3b82f6');
+          var newMarker = placeRouteMarker(lngLat, '#ef4444');
+
+          var from = routePoints[routePoints.length - 1];
+          routePoints.push(lngLat);
+
+          fetchSegment(from, lngLat,
+            function(feature) {
+              routeSegments.push(feature.geometry.coordinates);
+              routeTotalKm  += feature.properties.distance_km;
+              routeTotalMin += feature.properties.duration_min;
+              addRouteLayers();
+              refreshRouteElevation();  // lädt elevation async, updateRoutePopup darin
+              setRouteStatus('Weiteren Punkt klicken oder Route-Button zum Beenden');
+            },
+            function(errMsg) {
+              routePoints.pop();
+              newMarker.remove();
+              routeMarkers.pop();
+              if (routeMarkers.length > 1) {
+                setMarkerColor(routeMarkers[routeMarkers.length - 1], '#ef4444');
+              }
+              if (routePopup) routePopup.remove();
+              routePopup = new maplibregl.Popup({ closeOnClick: true })
+                .setLngLat(lngLat)
+                .setHTML('<span style="color:#dc2626;font-size:13px">' + errMsg + '</span>')
+                .addTo(map);
+            }
+          );
+        }
+
+        document.getElementById('route-btn').addEventListener('click', function() {
+          if (routeActive || routePoints.length > 0) {
+            clearRoute();
+          } else {
+            if (measureActive) stopMeasure();
+            routeActive = true;
+            this.classList.add('active');
+            document.getElementById('route-profile').style.display = '';
+            map.getCanvasContainer().classList.add('route-active');
+            map.on('click', onRouteClick);
+            setRouteStatus('Startpunkt klicken');
+          }
+        });
+
+        // Profil ändern → alle segmente neu berechnen
+        document.getElementById('route-profile').addEventListener('change', function() {
+          if (routePoints.length < 2) return;
+          var points = routePoints.slice();
+          routeSegments = [];
+          routeTotalKm  = 0;
+          routeTotalMin = 0;
+          routeEle      = null;
+          removeRouteLayers();
+          if (routePopup) { routePopup.remove(); routePopup = null; }
+
+          function fetchNext(idx) {
+            if (idx >= points.length - 1) {
+              addRouteLayers();
+              refreshRouteElevation();
+              return;
+            }
+            fetchSegment(points[idx], points[idx + 1],
+              function(feature) {
+                routeSegments.push(feature.geometry.coordinates);
+                routeTotalKm  += feature.properties.distance_km;
+                routeTotalMin += feature.properties.duration_min;
+                fetchNext(idx + 1);
+              },
+              function(errMsg) {
+                setRouteStatus('Fehler bei Segment ' + (idx + 1) + ': ' + errMsg);
+              }
+            );
+          }
+          fetchNext(0);
+        });
+        // --- Ende Routing ---
+
+        // --- Info-Picker ---
+        var infoActive = false;
+        var infoPopup  = null;
+
+        function stopInfo() {
+          infoActive = false;
+          document.getElementById('info-btn').classList.remove('active');
+          map.getCanvasContainer().classList.remove('info-active');
+          map.off('click', onInfoClick);
+        }
+
+        function onInfoClick(e) {
+          var lat = e.lngLat.lat;
+          var lon = e.lngLat.lng;
+          var dms = function(deg, pos, neg) {
+            var d = Math.abs(deg);
+            var dFloor = Math.floor(d);
+            var mAll  = (d - dFloor) * 60;
+            var mFloor = Math.floor(mAll);
+            var s = ((mAll - mFloor) * 60).toFixed(2);
+            return dFloor + '° ' + mFloor + '\' ' + s + '" ' + (deg >= 0 ? pos : neg);
+          };
+          // Initialinhalt mit Koordinaten – Adresse wird nachgeladen
+          var coordHtml =
+            '<strong>Koordinaten</strong><br>' +
+            '<span style="font-family:monospace">' + lat.toFixed(6) + ', ' + lon.toFixed(6) + '</span><br>' +
+            '<span style="color:#888;font-size:11px">' + dms(lat,'N','S') + ' &nbsp; ' + dms(lon,'E','W') + '</span>';
+          var loadingHtml =
+            '<div style="font-size:13px;line-height:1.7">' + coordHtml +
+            '<hr style="margin:6px 0;border:none;border-top:1px solid #eee">' +
+            '<span style="color:#bbb;font-size:11px">Adresse wird geladen …</span></div>';
+
+          if (infoPopup) infoPopup.remove();
+          infoPopup = new maplibregl.Popup({ closeOnClick: true, maxWidth: '300px' })
+            .setLngLat([lon, lat])
+            .setHTML(loadingHtml)
+            .addTo(map);
+
+          // Reverse-Geocoding via Photon
+          fetch('PHOTONSERVER/reverse?lat=' + lat.toFixed(6) + '&lon=' + lon.toFixed(6) + '&limit=1')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (!infoPopup || !infoPopup.isOpen()) return;
+              var p = (data.features && data.features[0]) ? data.features[0].properties : null;
+              var addrLines = [];
+              if (p) {
+                if (p.name)       addrLines.push('<strong>' + p.name + '</strong>');
+                if (p.street)     addrLines.push(p.street + (p.housenumber ? ' ' + p.housenumber : ''));
+                if (p.postcode || p.city)
+                                  addrLines.push((p.postcode ? p.postcode + ' ' : '') + (p.city || ''));
+                if (p.state && p.state !== p.city) addrLines.push(p.state);
+                if (p.country)    addrLines.push('<span style="color:#888;font-size:11px">' + p.country + '</span>');
+              }
+              var addrHtml = addrLines.length
+                ? addrLines.join('<br>')
+                : '<span style="color:#aaa;font-size:11px">Keine Adresse gefunden</span>';
+              infoPopup.setHTML(
+                '<div style="font-size:13px;line-height:1.7">' + coordHtml +
+                '<hr style="margin:6px 0;border:none;border-top:1px solid #eee">' +
+                addrHtml + '</div>'
+              );
+            })
+            .catch(function() {
+              if (!infoPopup || !infoPopup.isOpen()) return;
+              infoPopup.setHTML(
+                '<div style="font-size:13px;line-height:1.7">' + coordHtml +
+                '<hr style="margin:6px 0;border:none;border-top:1px solid #eee">' +
+                '<span style="color:#aaa;font-size:11px">Adresse nicht verfügbar</span></div>'
+              );
+            });
+        }
+
+        document.getElementById('info-btn').addEventListener('click', function() {
+          if (infoActive) {
+            stopInfo();
+          } else {
+            if (measureActive) stopMeasure();
+            if (routeActive || routePoints.length > 0) clearRoute();
+            infoActive = true;
+            this.classList.add('active');
+            map.getCanvasContainer().classList.add('info-active');
+            map.on('click', onInfoClick);
+          }
+        });
+
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape' && infoActive) stopInfo();
+        });
+        // --- Ende Info-Picker ---
 		</script>
   </body>
 </html>
