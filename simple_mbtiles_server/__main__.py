@@ -1142,6 +1142,7 @@ def simple_mbtiles_server(
         mbtiles,
         http_access_control_allow_origin,
         photon_server=None,
+        photon_server_internal=None,
         tile_cache_size=2000,
         gpx_dir=None,
         gpx_max_files=200,
@@ -1879,7 +1880,7 @@ def simple_mbtiles_server(
             'routing':  True,
             'mcp':      True,
             'gpx':      True,
-            'geocoding': bool(photon_server),
+            'geocoding': bool(photon_url),
             'mcp_tools': mcp_server.tool_names(),
             'routing_limits': {
                 'max_tiles': route_max_tiles,
@@ -1940,34 +1941,41 @@ def simple_mbtiles_server(
         except RuntimeError:
             return path
 
+    # PHOTONSERVER is baked into index.html by startup.sh, so it has to be
+    # the URL a *browser* can reach.  Server-side calls from inside a
+    # container usually need a different address (service name on a shared
+    # container network), hence the optional override.
+    photon_url = (photon_server_internal or photon_server or '').rstrip('/')
+
     def _photon_get(path, params):
-        if not photon_server:
+        if not photon_url:
             raise ToolError('geocoding is not configured (PHOTONSERVER is unset)')
-        url = photon_server.rstrip('/') + path
+        url = photon_url + path
         try:
             resp = http_client.get(url, params=params, timeout=15.0)
         except httpx.ConnectError as exc:
-            # Classic container pitfall: PHOTONSERVER resolves to a LAN
-            # address that the container network cannot route to. Say so,
-            # instead of leaking a bare "Connection refused".
+            # Classic container pitfall: PHOTONSERVER is the public URL the
+            # browser uses, and it often resolves to a LAN address the
+            # container network cannot route to (split-horizon DNS).
             raise ToolError(
-                'cannot reach the Photon server at %s (%s). If sms runs in a '
-                'container and PHOTONSERVER points into your LAN, the '
-                'container network has no route there -- try --network=host '
-                'or a Photon address reachable from inside the container.'
-                % (photon_server, exc))
+                'cannot reach the Photon server at %s (%s). PHOTONSERVER is '
+                'also embedded into the map UI, so it has to stay the URL a '
+                'browser can reach -- set PHOTONSERVER_INTERNAL to an address '
+                'reachable from inside this container (e.g. '
+                'http://photon:2322 on a shared podman network) instead of '
+                'changing PHOTONSERVER.' % (photon_url, exc))
         except httpx.TimeoutException as exc:
-            raise ToolError('Photon server at %s timed out (%s)' % (photon_server, exc))
+            raise ToolError('Photon server at %s timed out (%s)' % (photon_url, exc))
         except httpx.HTTPError as exc:
-            raise ToolError('photon request to %s failed: %s' % (photon_server, exc))
+            raise ToolError('photon request to %s failed: %s' % (photon_url, exc))
         if resp.status_code != 200:
             raise ToolError('Photon server at %s returned HTTP %d'
-                            % (photon_server, resp.status_code))
+                            % (photon_url, resp.status_code))
         try:
             return resp.json()
         except ValueError:
             raise ToolError('Photon server at %s returned a non-JSON response'
-                            % photon_server)
+                            % photon_url)
 
     def _photon_features(payload, limit):
         results = []
@@ -2572,6 +2580,7 @@ def main():
             env['MBTILES'],
             env.get('HTTP_ACCESS_CONTROL_ALLOW_ORIGIN'),
             photon_server=env.get('PHOTONSERVER'),
+            photon_server_internal=env.get('PHOTONSERVER_INTERNAL'),
             tile_cache_size=env_int('TILE_CACHE_SIZE', 2000),
             gpx_dir=env.get('GPX_DIR'),
             gpx_max_files=env_int('GPX_MAX_FILES', 200),

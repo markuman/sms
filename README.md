@@ -51,6 +51,40 @@ Just set `-e PHOTONSERVER="https://photon.osuv.de"` for your sms Container.
 This also enables the `geocode` and `reverse_geocode` MCP tools; without it
 they are not registered at all.
 
+### Two consumers, possibly two URLs
+
+`PHOTONSERVER` is substituted into `index.html` at startup, so **the browser**
+talks to Photon directly with that URL — it has to be publicly reachable.
+
+The MCP tools, on the other hand, call Photon **from inside the container**.
+If both run in podman/docker, the public hostname often resolves to a LAN
+address the container network cannot route to (split-horizon DNS), and you get
+`Connection refused`. Changing `PHOTONSERVER` is not the fix: that would break
+the frontend.
+
+Use `PHOTONSERVER_INTERNAL` for the server-side path instead:
+
+```bash
+podman network create osm
+
+podman run -d --rm --network osm --name photon \
+  -e UPDATE_STRATEGY=DISABLED \
+  -p 8888:2322 \
+  -v /home/m/osm/photon/:/photon/data \
+  docker.io/rtuszik/photon-docker:2.1.1
+
+podman run -ti --rm --network osm --name sms \
+  -p 9000:9000 \
+  -e PHOTONSERVER="https://photon.osuv.de" \
+  -e PHOTONSERVER_INTERNAL="http://photon:2322" \
+  -v /home/m/osm/sms/:/data/ \
+  localhost/sms:dev
+```
+
+If `PHOTONSERVER_INTERNAL` is unset, server-side calls fall back to
+`PHOTONSERVER`, which is the right thing when both are reachable from
+everywhere (single host, no container network in between).
+
 ## Configuration
 
 Tilesets are configured through numbered environment variable groups
@@ -65,7 +99,8 @@ Tilesets are configured through numbered environment variable groups
 | `MBTILES__n__MIN_ZOOM` | yes | Minimum zoom level |
 | `MBTILES__n__MAX_ZOOM` | yes | Maximum zoom level |
 | `HTTP_ACCESS_CONTROL_ALLOW_ORIGIN` | no | CORS header value |
-| `PHOTONSERVER` | no | Photon base URL; enables geocoding |
+| `PHOTONSERVER` | no | Public Photon base URL; enables geocoding and is embedded into the map UI |
+| `PHOTONSERVER_INTERNAL` | no | Photon URL used for server-side calls (MCP tools) when the public one is not reachable from inside the container |
 | `TILE_CACHE_SIZE` | no | Decoded road tiles kept in memory (default 2000; contour and POI caches get a quarter of that each) |
 | `ROUTE_MAX_TILES` | no | Corridor tile limit per segment (default 1200) |
 | `ROUTE_MAX_CROW_KM` | no | Straight-line limit per segment in km (default 50) |

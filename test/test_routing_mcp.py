@@ -711,6 +711,49 @@ def test_poi_categories_separate_huts_from_shelters():
     assert not _matches_poi_category({'subclass': 'camp_site'}, 'alpine_hut')
 
 
+def test_photon_url_prefers_internal_override():
+    """
+    PHOTONSERVER is baked into index.html by startup.sh, so it must stay the
+    URL a *browser* can reach. Server-side calls from inside a container
+    usually need a different address, so PHOTONSERVER_INTERNAL overrides it
+    for httpx only -- without touching what the frontend gets.
+    """
+    import re
+
+    source_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simple_mbtiles_server', '__main__.py')
+    with open(source_path) as f:
+        source = f.read()
+
+    # the server-side call must resolve through the override
+    resolution = re.search(r'photon_url = \((.*?)\)\.rstrip', source, re.S)
+    assert resolution
+    assert 'photon_server_internal or photon_server' in resolution.group(1)
+
+    body = source.split('def _photon_get(path, params):', 1)[1]
+    body = body.split('def _photon_features', 1)[0]
+    assert 'photon_url' in body
+    # must not fall back to the public URL for the actual request
+    assert 'photon_server.rstrip' not in body
+
+    # startup.sh only ever substitutes the public variable into the HTML
+    startup_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'startup.sh')
+    with open(startup_path) as f:
+        startup = f.read()
+    assert 'PHOTONSERVER_INTERNAL' not in startup
+
+    # and the template carries no PHOTONSERVER_INTERNAL placeholder that a
+    # naive sed on the shorter name would corrupt
+    template_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simple_mbtiles_server', 'vendor', 'index_with_photon.html')
+    with open(template_path, encoding='utf-8') as f:
+        template = f.read()
+    assert set(re.findall(r'PHOTONSERVER\w*', template)) == {'PHOTONSERVER'}
+
+
 def test_frontend_poi_categories_match_server():
     """
     The map UI carries its own copy of the category filters (it re-matches
