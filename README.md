@@ -48,6 +48,66 @@ You can add coordinates and Zoomlevel.
 
 Just set `-e PHOTONSERVER="https://photon.osuv.de"` for your sms Container.
 
+This also enables the `geocode` and `reverse_geocode` MCP tools; without it
+they are not registered at all.
+
+### Two consumers, possibly two URLs
+
+`PHOTONSERVER` is substituted into `index.html` at startup, so **the browser**
+talks to Photon directly with that URL — it has to be publicly reachable.
+
+The MCP tools, on the other hand, call Photon **from inside the container**.
+If both run in podman/docker, the public hostname often resolves to a LAN
+address the container network cannot route to (split-horizon DNS), and you get
+`Connection refused`. Changing `PHOTONSERVER` is not the fix: that would break
+the frontend.
+
+Use `PHOTONSERVER_INTERNAL` for the server-side path instead:
+
+```bash
+podman network create osm
+
+podman run -d --rm --network osm --name photon \
+  -e UPDATE_STRATEGY=DISABLED \
+  -p 8888:2322 \
+  -v /home/m/osm/photon/:/photon/data \
+  docker.io/rtuszik/photon-docker:2.1.1
+
+podman run -ti --rm --network osm --name sms \
+  -p 9000:9000 \
+  -e PHOTONSERVER="https://photon.osuv.de" \
+  -e PHOTONSERVER_INTERNAL="http://photon:2322" \
+  -v /home/m/osm/sms/:/data/ \
+  localhost/sms:dev
+```
+
+If `PHOTONSERVER_INTERNAL` is unset, server-side calls fall back to
+`PHOTONSERVER`, which is the right thing when both are reachable from
+everywhere (single host, no container network in between).
+
+## Configuration
+
+Tilesets are configured through numbered environment variable groups
+(`MBTILES__1__*`, `MBTILES__2__*`, …):
+
+| Variable | Required | Description |
+|---|---|---|
+| `PORT` | yes | Listen port |
+| `MBTILES__n__URL` | yes | Path to the `.mbtiles` file |
+| `MBTILES__n__IDENTIFIER` | yes | Tileset name used in URLs |
+| `MBTILES__n__VERSION` | yes | Tileset version used in URLs |
+| `MBTILES__n__MIN_ZOOM` | yes | Minimum zoom level |
+| `MBTILES__n__MAX_ZOOM` | yes | Maximum zoom level |
+| `HTTP_ACCESS_CONTROL_ALLOW_ORIGIN` | no | CORS header value |
+| `PHOTONSERVER` | no | Public Photon base URL; enables geocoding and is embedded into the map UI |
+| `PHOTONSERVER_INTERNAL` | no | Photon URL used for server-side calls (MCP tools) when the public one is not reachable from inside the container |
+| `TILE_CACHE_SIZE` | no | Decoded road tiles kept in memory (default 2000; contour and POI caches get a quarter of that each) |
+| `ROUTE_MAX_TILES` | no | Corridor tile limit per segment (default 1200) |
+| `ROUTE_MAX_CROW_KM` | no | Straight-line limit per segment in km (default 50) |
+| `GPX_DIR` | no | Where generated GPX files are stored (default `$TMPDIR/sms-gpx`) |
+| `GPX_MAX_FILES` | no | Keep at most this many GPX files (default 200) |
+| `GPX_TTL_SECONDS` | no | Delete GPX files older than this (default 86400) |
+
 
 ## HELP WANTED
 
@@ -89,13 +149,29 @@ Returns JSON capabilities indicating available optional features.
 **Response:**
 ```json
 {
-  "contours": true | false,
-  "routing":  true
+  "contours":  true,
+  "routing":   true,
+  "mcp":       true,
+  "gpx":       true,
+  "geocoding": false,
+  "mcp_tools": ["search_poi", "plan_route", "export_gpx"],
+  "routing_limits": { "max_tiles": 1200, "max_crow_km": 50.0, "zoom": 14 },
+  "tile_cache": {
+    "roads":    { "entries": 812, "max_entries": 2000, "hits": 4210, "misses": 812 },
+    "contours": { "entries": 240, "max_entries": 500,  "hits": 190,  "misses": 240 },
+    "poi":      { "entries": 0,   "max_entries": 500,  "hits": 0,    "misses": 0 }
+  }
 }
 ```
 
 - `contours` — whether `contours.mbtiles` was detected and loaded
 - `routing` — always `true`; indicates the `/v1/route/` endpoint is available
+- `mcp` — the MCP endpoint at `POST /mcp` is available
+- `gpx` — GPX export is available
+- `geocoding` — whether `PHOTONSERVER` is configured (enables the `geocode`
+  and `reverse_geocode` MCP tools)
+- `mcp_tools` — names of the registered MCP tools
+- `tile_cache` — live hit/miss counters of the decoded-tile caches
 
 
 ### `GET /v1/poi/{identifier}@{version}?lat={lat}&lon={lon}&category={category}&radius={radius}`
@@ -109,10 +185,20 @@ Search for Points of Interest (POI) within a radius and return GeoJSON features.
 **Query Parameters:**
 - `lat` — Latitude coordinate (required)
 - `lon` — Longitude coordinate (required)
-- `category` — POI category: `supermarket`, `pharmacy`, `hospital`, `fuel`, `charging_station`, or `alpine_hut` (required)
+- `category` — POI category (required): `supermarket`, `pharmacy`, `hospital`,
+  `fuel`, `charging_station`, `alpine_hut`, `camp_site`, or `shelter`
+
+  Note that `alpine_hut` covers only real mountain huts
+  (`alpine_hut`, `wilderness_hut`, `basic_hut`). OpenMapTiles files bus stop
+  shelters and public air-raid shelters under `subclass=shelter`, which around
+  Garmisch is 113 of 122 hits and mostly unnamed — those live in the separate
+  `shelter` category so they cannot bury the actual huts.
 - `radius` — Search radius in km, default 15, max 50 (optional)
 
-**Response:** GeoJSON FeatureCollection of POIs
+**Response:** GeoJSON FeatureCollection of POIs, each with a
+`properties.distance_km`. Sorted by distance, but named POIs come first
+within the same ~500 m band — an unnamed hut slightly closer is less useful
+than a named one you can look up.
 
 
 ### `GET /v1/tiles/{identifier}@{version}/{z}/{x}/{y}.mvt`
@@ -235,6 +321,11 @@ No external routing engine required — routing is performed entirely server-sid
 - `from` — Start point as `lat,lon` (required)
 - `to` — End point as `lat,lon` (required)
 - `profile` — Routing profile: `foot` (default) or `bike`
+- `buffer_km` — Corridor half-width around the straight line (optional).
+  Defaults to 10 % of the segment length, at least ~3.3 km. Raise it when a
+  detour around a lake or a closed area is needed.
+- `elevation` — `true` to add `ascent_m`/`descent_m` from `contours.mbtiles`
+  and switch the duration estimate to DIN 33466 (optional)
 
 **Example:**
 ```
@@ -254,7 +345,12 @@ GET /v1/route/mytiles@1.0.0?from=48.137,11.575&to=48.155,11.602&profile=foot
     "duration_min": 43.2,
     "profile":      "foot",
     "tiles_loaded": 36,
-    "nodes":        12847
+    "buffer_tiles": 2.0,
+    "nodes":        12847,
+    "cache_hits":   30,
+    "cache_misses": 6,
+    "snap_start_m": 12.4,
+    "snap_end_m":   31.9
   }
 }
 ```
@@ -273,17 +369,172 @@ GET /v1/route/mytiles@1.0.0?from=48.137,11.575&to=48.155,11.602&profile=foot
 | `motorway`, `trunk` | not passable | not passable |
 | `steps` | 1.2 | not passable |
 
-**Duration estimate:** 4.5 km/h for `foot`, 15 km/h for `bike`.
+**Duration estimate:** 4.5 km/h for `foot`, 15 km/h for `bike`. With
+`elevation=true` and `contours.mbtiles` present, `foot` switches to a
+DIN 33466 / SAC estimate instead (300 m ascent or 500 m descent per hour,
+combined as `max(horizontal, vertical) + min(horizontal, vertical) / 2`).
+
+### Tile selection: corridor instead of bounding box
+
+Tiles are loaded as a **corridor along the straight line** between the two
+points, not as a bounding box. At 48° N a zoom-14 tile is about 1.64 km wide,
+so a bounding box for a diagonal 50 km route covers ~1260 tiles of which most
+are nowhere near the route. The corridor keeps only tiles within
+`buffer_km` of the line:
+
+| Route | Corridor | Old bounding box | Saving |
+|---|---|---|---|
+| 30 km diagonal | 112 tiles | 484 tiles | 4.3x |
+| 50 km diagonal | 276 tiles | 1260 tiles | 4.6x |
+| 50 km at 15° | 239 tiles | 598 tiles | 2.5x |
+| 50 km axis-parallel | 99 tiles | 100 tiles | 1.0x |
+
+For an almost axis-parallel route the bounding box is naturally narrow
+already, so the default buffer is capped at the box's short side and the
+corridor never ends up loading materially more than a bbox would.
 
 **Limits:**
-- Maximum bounding box: 500 tiles at zoom 14 (~30 km routes)
-- Start and end points must be within 500 m of a routable road
-- No turn restrictions (OSM relations are not stored in vector tiles)
-- Graph is built fresh per request (no caching); expect 0.5–3 s for 10–30 km routes
+- `max_tiles`: 1200 tiles at zoom 14 (OOM guard, configurable via
+  `ROUTE_MAX_TILES`)
+- `max_crow_km`: 50 km straight-line distance per segment (configurable via
+  `ROUTE_MAX_CROW_KM`). Longer tours are possible via the `plan_route` MCP
+  tool, which chains segments.
+- Start and end points must be within 500 m of a routable road. Both ends are
+  snapped onto the *same* connected part of the network — vector tiles are
+  clipped at tile borders, so the decoded graph contains many short
+  disconnected stubs that would otherwise swallow the start point.
+- No turn restrictions and no access tags (OSM relations and `access=private`
+  are not stored in vector tiles)
+- Routing always uses zoom 14. There is deliberately **no zoom-13 fallback**:
+  `path` and `footway` have minzoom 14 in OpenMapTiles, so on z13 exactly the
+  ways that matter for hiking disappear.
+- Decoded tiles are cached (see `TILE_CACHE_SIZE`), so repeated queries in the
+  same region are much faster than the first one. Expect ~0.2–2 s cold and
+  well under 0.5 s warm for a 50 km segment. Memory stays within the
+  documented 512 MB.
 
 **Error responses:**
-- `400` — invalid parameters or bounding box too large
-- `404` — no road network in area, or no route found between the two points
+- `400` — invalid parameters, straight-line distance over the limit, or
+  corridor over `max_tiles`
+- `404` — no road network in area, no way passable for the profile, start or
+  end further than 500 m from a road, or no route found
+
+
+### `POST /v1/elevation/{identifier}@{version}`
+
+Estimate ascent and descent of a track by intersecting it with the contour
+lines from `contours.mbtiles`. Only available when that file is present.
+
+**Body:**
+```json
+{ "coordinates": [[11.575, 48.137], [11.602, 48.155]] }
+```
+
+Coordinates are `[lon, lat]` pairs (GeoJSON order).
+
+**Response:**
+```json
+{ "ascent_m": 640, "descent_m": 210 }
+```
+
+Accuracy is limited by the contour interval (about ±half an interval), so
+treat these as estimates, not survey data.
+
+**Error responses:**
+- `400` — invalid body or area too large
+- `404` — no `contours.mbtiles` loaded
+
+
+### `GET /v1/gpx/{id}.gpx`
+
+Download a GPX file previously generated by the `plan_route` or `export_gpx`
+MCP tool. The id is the `gpx_id` from the tool result.
+
+**Response:** `application/gpx+xml` (GPX 1.1, with `<wpt>` waypoints and
+`<ele>` values when contours were available)
+
+Generated files are cleaned up automatically: anything older than
+`GPX_TTL_SECONDS` is removed, and at most `GPX_MAX_FILES` are kept.
+
+**Error responses:**
+- `404` — unknown or expired id
+
+
+## MCP API (route planning for LLM agents)
+
+sms exposes a [Model Context Protocol](https://modelcontextprotocol.io)
+endpoint so that an LLM agent can plan hiking and trekking tours and export
+them as GPX — without an external routing engine and without any additional
+data source.
+
+### `POST /mcp`
+
+Stateless JSON-RPC 2.0 (streamable HTTP without SSE). Implemented methods:
+`initialize`, `notifications/*`, `ping`, `tools/list`, `tools/call`.
+`GET /mcp` returns `405` — there is no event stream.
+
+Register it with an MCP client, for example in `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "sms": {
+      "type": "remote",
+      "url": "https://maps.example.org/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+Or check it manually:
+
+```bash
+curl -s localhost:9000/mcp -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq
+```
+
+### Tools
+
+| Tool | Purpose | Requires |
+|---|---|---|
+| `geocode` | place name / address → coordinates | `PHOTONSERVER` |
+| `reverse_geocode` | coordinates → nearest address | `PHOTONSERVER` |
+| `search_poi` | huts, water, resupply around a point | — |
+| `plan_route` | multi-waypoint tour + GPX export | — |
+| `export_gpx` | write arbitrary coordinates as GPX | — |
+
+`plan_route` takes `waypoints: [[lat, lon], ...]` and routes each consecutive
+pair separately. Each single segment must stay under `max_crow_km`, but the
+total tour is unlimited — three 45 km segments give a 135 km track. If a
+segment fails, the remaining segments are still returned and the failure is
+reported per segment (`"segment 2 (48.15,11.57 -> ...): no routable way
+within 500 m ..."`), so the agent can fix that one waypoint instead of
+guessing blindly.
+
+The track geometry is deliberately **not** part of the tool result — a few
+thousand track points as text would flood the model's context window. The
+tool returns metadata plus a URL:
+
+```json
+{
+  "name": "Karwendel-Durchquerung",
+  "distance_km": 42.1,
+  "duration_min": 561,
+  "ascent_m": 1840,
+  "descent_m": 1620,
+  "points": 3000,
+  "gpx_url": "https://maps.example.org/v1/gpx/5c925fc1584040a4.gpx"
+}
+```
+
+### What the agent cannot know
+
+The tool descriptions state this explicitly, and it is worth repeating here:
+vector tiles do **not** contain `sac_scale`, `trail_visibility`,
+`via_ferrata_scale`, `ele` or `surface`. A T1 forest stroll and a T5 scramble
+are indistinguishable in this data. Never treat a generated track as a safety
+assessment — cross-check it against a topographic map before walking it.
 
 
 ### `GET /v1/static/{identifier}@{version}/{file}`

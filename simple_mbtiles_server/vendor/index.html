@@ -172,7 +172,7 @@
       <label class="toolbar-btn">GPX laden<input type="file" id="gpx-input" accept=".gpx" style="display:none"></label>
       <button id="gpx-clear" class="toolbar-btn" title="Track entfernen">🗑</button>
       <select id="style-select" class="toolbar-btn">
-        <option value="osm-bright-gl-style" selected>OSM Bright</option>
+        <option value="osm-bright-gl-style">OSM Bright</option>
         <option value="dark-matter-gl-style">Dark Matter</option>
         <option value="fiord-color-gl-style">Fiord Color</option>
         <option value="maptiler-3d-gl-style">MapTiler 3D</option>
@@ -180,7 +180,7 @@
         <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
         <option value="maptiler-toner-gl-style">MapTiler Toner</option>
         <option value="positron-gl-style">Positron</option>
-        <option value="osuv-style">osuv</option>
+        <option value="osuv-style" selected>osuv</option>
       </select>
       <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
       <span id="measure-result" style="display:none"></span>
@@ -223,7 +223,7 @@
 
       var map = new maplibregl.Map({
           container: 'map',
-          style: '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
+          style: '/v1/styles/osuv-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
           center: [0, 0],
           zoom: 1,
           attributionControl: false
@@ -462,7 +462,7 @@
 
         // --- Routing ---
         // Tile-Identifier aus der initialen Style-URL lesen (z.B. "mytiles@1.0.0")
-        var _initialStyleUrl = '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0';
+        var _initialStyleUrl = '/v1/styles/osuv-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0';
         var _tilesParam = new URLSearchParams(_initialStyleUrl.split('?')[1]).get('tiles') || 'mytiles@1.0.0';
         var _tilesParts = _tilesParam.split('@');
         var routeTilesId  = _tilesParts[0];
