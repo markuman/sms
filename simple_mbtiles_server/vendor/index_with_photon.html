@@ -378,7 +378,7 @@
           <!-- Seite 1: Karte -->
           <div class="tb-page" id="tb-page-1">
             <select id="style-select" class="toolbar-btn">
-              <option value="osm-bright-gl-style" selected>OSM Bright</option>
+              <option value="osm-bright-gl-style">OSM Bright</option>
               <option value="dark-matter-gl-style">Dark Matter</option>
               <option value="fiord-color-gl-style">Fiord Color</option>
               <option value="maptiler-3d-gl-style">MapTiler 3D</option>
@@ -386,7 +386,7 @@
               <option value="maptiler-terrain-gl-style">MapTiler Terrain</option>
               <option value="maptiler-toner-gl-style">MapTiler Toner</option>
               <option value="positron-gl-style">Positron</option>
-              <option value="osuv-style">osuv</option>
+              <option value="osuv-style" selected>osuv</option>
             </select>
             <label id="contour-toggle">
               <input type="checkbox" id="contour-checkbox">
@@ -454,7 +454,7 @@
 
       var map = new maplibregl.Map({
           container: 'map',
-          style: '/v1/styles/osm-bright-gl-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
+          style: '/v1/styles/osuv-style@1.0.0/style.json?fonts=fonts-gl@1.0.0&tiles=mytiles@1.0.0',
           center: [0, 0],
           zoom: 1,
           attributionControl: false
