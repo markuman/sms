@@ -385,6 +385,57 @@ def test_astar_matches_dijkstra():
     assert abs(distance - dijkstra()) < 1e-6
 
 
+def test_snapping_avoids_disconnected_fragments():
+    """
+    Regression: vector tiles are clipped at tile borders, so a real network
+    decodes into one large component plus hundreds of stubs. Snapping to the
+    geometrically nearest node put the start on such a 2-node dead end and
+    every route failed with "no route found" -- even 200 m inside a town.
+    """
+    from simple_mbtiles_server.__main__ import (
+        _astar_route, _build_graph, _nearest_node, _snap_pair)
+
+    # a connected main line ...
+    segments = []
+    for i in range(10):
+        a = (1150000 + i * 100, 4810000)
+        b = (1150000 + (i + 1) * 100, 4810000)
+        segments.append((a, b, 0.05, 'path'))
+    # ... plus an isolated stub that happens to sit closer to the start
+    stub_a = (1150010, 4810010)
+    stub_b = (1150020, 4810010)
+    segments.append((stub_a, stub_b, 0.01, 'path'))
+
+    graph = _build_graph(segments, 'foot')
+    start_lon, start_lat = 1150012 / 1e5, 4810009 / 1e5
+    end_lon, end_lat = 1151000 / 1e5, 4810000 / 1e5
+
+    # the naive nearest node is the stub, and routing from there fails
+    naive, _ = _nearest_node(graph, start_lon, start_lat)
+    assert naive in (stub_a, stub_b)
+    assert _astar_route(graph, naive, (1151000, 4810000))[0] is None
+
+    # _snap_pair picks the connected component instead
+    start, start_km, end, end_km = _snap_pair(
+        graph, start_lon, start_lat, end_lon, end_lat)
+    assert start not in (stub_a, stub_b)
+    assert start_km < 0.5 and end_km < 0.5
+    coords, distance = _astar_route(graph, start, end)
+    assert coords is not None and distance > 0
+
+
+def test_snap_pair_reports_distance_when_nothing_in_range():
+    """Unreachable input must still yield a usable "x m away" error."""
+    from simple_mbtiles_server.__main__ import _build_graph, _snap_pair
+
+    segments = [((1150000, 4810000), (1150100, 4810000), 0.1, 'path')]
+    graph = _build_graph(segments, 'foot')
+    # both far away from the single segment at 11.5, 48.1
+    _start, start_km, _end, end_km = _snap_pair(graph, 0.0, 0.0, 20.0, 10.0)
+    assert start_km > 0.5
+    assert end_km > 0.5
+
+
 def test_tiles_decoded_once_serve_both_profiles():
     """
     Tile decoding must not depend on the profile, otherwise a cached tile

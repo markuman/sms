@@ -889,16 +889,138 @@ def _build_graph(all_segments, profile):
     return graph
 
 
-def _nearest_node(graph, lon, lat):
-    """Linear scan for the graph node closest to (lon, lat). Returns (key, dist_km)."""
+def _nearest_node(graph, lon, lat, candidates=None):
+    """
+    Linear scan for the graph node closest to (lon, lat).
+    Returns (key, dist_km).  If *candidates* is given, only those nodes are
+    considered.
+    """
     best_key = None
     best_dist = float('inf')
-    for key in graph:
+    for key in (graph if candidates is None else candidates):
         d = _haversine(lon, lat, key[0] / _E5, key[1] / _E5)
         if d < best_dist:
             best_dist = d
             best_key = key
     return best_key, best_dist
+
+
+def _connected_components(graph):
+    """
+    Partition the graph into connected components, largest first.
+
+    Vector tiles are clipped at tile borders, so a real road network decodes
+    into one big component plus hundreds of small fragments (dead ends of
+    ways that continue in a tile we did not load).  Snapping start or
+    destination onto such a fragment yields "no route found" even though the
+    points sit right next to a perfectly routable street.
+    """
+    seen = set()
+    components = []
+    for node in graph:
+        if node in seen:
+            continue
+        seen.add(node)
+        stack = [node]
+        component = [node]
+        while stack:
+            current = stack.pop()
+            for neighbour, _weighted, _real in graph.get(current, ()):
+                if neighbour not in seen:
+                    seen.add(neighbour)
+                    stack.append(neighbour)
+                    component.append(neighbour)
+        components.append(component)
+    components.sort(key=len, reverse=True)
+    return components
+
+
+def _snap_pair(graph, from_lon, from_lat, to_lon, to_lat, max_snap_km=0.5):
+    """
+    Snap both endpoints onto the same connected component.
+
+    Picks the component with the smallest combined snap distance, provided
+    both endpoints stay within *max_snap_km*.  Returns
+    (start_node, start_km, end_node, end_km).
+
+    Two things keep this cheap on a 30k-node graph: a single pass over all
+    nodes bucketed by component id (instead of one scan per component -- a
+    25-tile graph has well over a thousand of them), and a squared planar
+    distance for the comparison.  Ranking by squared equirectangular distance
+    gives the same nearest node as haversine at these scales, and haversine
+    is only evaluated for the handful of winners, which removes ~60k calls.
+    """
+    components = _connected_components(graph)
+    if not components:
+        return None, float('inf'), None, float('inf')
+
+    component_of = {}
+    for index, component in enumerate(components):
+        for node in component:
+            component_of[node] = index
+
+    # Equirectangular scale factors around the midpoint; only used for
+    # ranking, so the tiny distortion over a few hundred metres is irrelevant.
+    mid_lat = (from_lat + to_lat) / 2.0
+    kx = 111.19 * math.cos(math.radians(mid_lat)) / _E5
+    ky = 111.19 / _E5
+    from_x = from_lon * _E5 * kx
+    from_y = from_lat * _E5 * ky
+    to_x = to_lon * _E5 * kx
+    to_y = to_lat * _E5 * ky
+    max_sq = max_snap_km * max_snap_km
+
+    best_start = {}
+    best_end = {}
+    overall_start = (float('inf'), None)
+    overall_end = (float('inf'), None)
+
+    for node, index in component_of.items():
+        node_x = node[0] * kx
+        node_y = node[1] * ky
+
+        dx = node_x - from_x
+        dy = node_y - from_y
+        d_start = dx * dx + dy * dy
+        current = best_start.get(index)
+        if current is None or d_start < current[0]:
+            best_start[index] = (d_start, node)
+        if d_start < overall_start[0]:
+            overall_start = (d_start, node)
+
+        dx = node_x - to_x
+        dy = node_y - to_y
+        d_end = dx * dx + dy * dy
+        current = best_end.get(index)
+        if current is None or d_end < current[0]:
+            best_end[index] = (d_end, node)
+        if d_end < overall_end[0]:
+            overall_end = (d_end, node)
+
+    best = None
+    for index, (start_sq, start_node) in best_start.items():
+        if start_sq > max_sq:
+            continue
+        end = best_end.get(index)
+        if end is None or end[0] > max_sq:
+            continue
+        total = start_sq + end[0]
+        if best is None or total < best[0]:
+            best = (total, start_node, end[1])
+
+    def exact(node, lon, lat):
+        return _haversine(lon, lat, node[0] / _E5, node[1] / _E5)
+
+    if best is None:
+        # Nothing routable in range -- report the plain nearest nodes so the
+        # caller can produce a meaningful "x m away" error message.
+        start_node = overall_start[1]
+        end_node = overall_end[1]
+        return (start_node, exact(start_node, from_lon, from_lat),
+                end_node, exact(end_node, to_lon, to_lat))
+
+    return (best[1], exact(best[1], from_lon, from_lat),
+            best[2], exact(best[2], to_lon, to_lat))
 
 
 def _astar_route(graph, start, end, max_expansions=2000000):
@@ -1505,8 +1627,12 @@ def simple_mbtiles_server(
         if not graph:
             raise RoutingError('no way passable for profile "%s" in area' % profile, 404)
 
-        start_node, start_snap_km = _nearest_node(graph, from_lon, from_lat)
-        end_node, end_snap_km = _nearest_node(graph, to_lon, to_lat)
+        # Snap both ends onto the *same* connected component. Tiles are
+        # clipped at their borders, so the decoded network contains hundreds
+        # of small fragments; the geometrically nearest node is regularly a
+        # dead end that is not connected to anything.
+        start_node, start_snap_km, end_node, end_snap_km = _snap_pair(
+            graph, from_lon, from_lat, to_lon, to_lat)
 
         if start_snap_km > 0.5:
             raise RoutingError(
@@ -1523,8 +1649,9 @@ def simple_mbtiles_server(
 
         if path_coords is None:
             raise RoutingError(
-                'no route found between %.5f,%.5f and %.5f,%.5f -- the corridor may '
-                'not contain a connection; try a waypoint or a larger buffer_km'
+                'no route found between %.5f,%.5f and %.5f,%.5f -- start and '
+                'destination are on separate parts of the network; try a '
+                'waypoint or a larger buffer_km'
                 % (from_lat, from_lon, to_lat, to_lon), 404)
 
         properties = {

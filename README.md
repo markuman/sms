@@ -354,7 +354,10 @@ corridor never ends up loading materially more than a bbox would.
 - `max_crow_km`: 50 km straight-line distance per segment (configurable via
   `ROUTE_MAX_CROW_KM`). Longer tours are possible via the `plan_route` MCP
   tool, which chains segments.
-- Start and end points must be within 500 m of a routable road
+- Start and end points must be within 500 m of a routable road. Both ends are
+  snapped onto the *same* connected part of the network — vector tiles are
+  clipped at tile borders, so the decoded graph contains many short
+  disconnected stubs that would otherwise swallow the start point.
 - No turn restrictions and no access tags (OSM relations and `access=private`
   are not stored in vector tiles)
 - Routing always uses zoom 14. There is deliberately **no zoom-13 fallback**:
