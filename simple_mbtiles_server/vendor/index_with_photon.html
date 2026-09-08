@@ -425,7 +425,9 @@
         <button class="poi-btn" data-poi="hospital" title="Krankenhaus / Arzt">🏥</button>
         <button class="poi-btn" data-poi="fuel" title="Tankstelle">⛽</button>
         <button class="poi-btn" data-poi="charging_station" title="Ladesäule">⚡</button>
-        <button class="poi-btn" data-poi="alpine_hut" title="Schutzhütte">🏕️</button>
+        <button class="poi-btn" data-poi="alpine_hut" title="Berghütte">🛖</button>
+        <button class="poi-btn" data-poi="camp_site" title="Campingplatz">⛺</button>
+        <button class="poi-btn" data-poi="shelter" title="Unterstand (auch Bushaltestellen)">⛱️</button>
         <button id="poi-clear" class="toolbar-btn" title="POI-Marker löschen">✕</button>
       </div>
     </div>
@@ -913,10 +915,29 @@
             }
           },
           alpine_hut: {
-            title: 'Schutzhütte / Camping', color: '#92400e', icon: '🏕️',
+            title: 'Berghütte', color: '#92400e', icon: '🛖',
             match: function(p) {
-              return ['alpine_hut','wilderness_hut','shelter','lean_to','basic_hut','camp_site'].indexOf(p.subclass) !== -1
-                  || ['shelter','accommodation','campsite'].indexOf(p.class) !== -1;
+              return ['alpine_hut','wilderness_hut','basic_hut'].indexOf(p.subclass) !== -1
+                  || p.class === 'alpine_hut';
+            }
+          },
+          camp_site: {
+            title: 'Campingplatz', color: '#15803d', icon: '⛺',
+            match: function(p) {
+              return ['camp_site','caravan_site'].indexOf(p.subclass) !== -1
+                  || p.class === 'campsite';
+            }
+          },
+          // Bewusst getrennt von alpine_hut: OpenMapTiles fasst unter
+          // subclass=shelter auch Bushaltestellen-Unterstände und
+          // Schutzräume zusammen. Rund um Garmisch sind das 113 von 122
+          // Treffern, meist ohne Namen -- die würden die echten Hütten
+          // aus jeder Trefferliste verdrängen.
+          shelter: {
+            title: 'Unterstand', color: '#78716c', icon: '⛱️',
+            match: function(p) {
+              return ['shelter','lean_to','picnic_site'].indexOf(p.subclass) !== -1
+                  || p.class === 'shelter';
             }
           }
         };
@@ -969,7 +990,10 @@
         function _addPoiMarker(f, category) {
           var cat    = POI_CATEGORIES[category] || { title: category, color: '#1060b0', icon: '📍' };
           var p      = f.properties || {};
-          var name   = p.name || p['name:de'] || p['name:latin'] || cat.title;
+          // OpenMapTiles verteilt Namen auf name, name_de, name:latin, ...
+          // Viele POIs (vor allem Unterstände) haben gar keinen Namen.
+          var name   = p.name || p.name_de || p['name:de'] || p['name:latin']
+                    || p.name_en || p['name:en'] || cat.title;
           var coords = f.geometry.coordinates;
           var popup  = new maplibregl.Popup({ offset: [0, -28], closeOnClick: false })
             .setHTML(poiPopupHtml(name, p.subclass, null));

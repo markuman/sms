@@ -217,14 +217,39 @@ _POI_CATEGORY_FILTERS = {
         'subclass': {'charging_station'},
         'class':    {'charging_station'},
     },
+    # Huts you can actually stay in. Deliberately excludes `shelter`:
+    # OpenMapTiles lumps bus stop shelters, weather shelters and public
+    # air-raid shelters under that subclass. Around Garmisch that is 113 of
+    # 122 hits, mostly unnamed, which buries the four real huts far beyond
+    # any sane result limit.
     'alpine_hut': {
-        'subclass': {
-            'alpine_hut', 'wilderness_hut', 'shelter',
-            'lean_to', 'basic_hut', 'camp_site',
-        },
-        'class': {'shelter', 'accommodation', 'campsite'},
+        'subclass': {'alpine_hut', 'wilderness_hut', 'basic_hut'},
+        'class': {'alpine_hut'},
+    },
+    # Everything roofed, including bus stop shelters and picnic huts.
+    'shelter': {
+        'subclass': {'shelter', 'lean_to', 'picnic_site'},
+        'class': {'shelter'},
+    },
+    'camp_site': {
+        'subclass': {'camp_site', 'caravan_site'},
+        'class': {'campsite'},
     },
 }
+
+
+def _poi_name(props):
+    """
+    Best available name for a POI.
+
+    OpenMapTiles splits names across `name`, `name_de`, `name:latin` and
+    friends; plenty of features carry a localised name but no plain `name`.
+    """
+    for key in ('name', 'name_de', 'name:de', 'name:latin', 'name_en', 'name:en', 'name_int'):
+        value = props.get(key)
+        if value:
+            return value
+    return None
 
 
 def _matches_poi_category(props, category):
@@ -1745,7 +1770,14 @@ def simple_mbtiles_server(
                 enriched['properties'] = props
                 features.append(enriched)
 
-        features.sort(key=lambda f: f['properties']['distance_km'])
+        # Sort by distance, but prefer named POIs inside the same rough
+        # distance band: an unnamed hut 200 m closer is much less useful to
+        # the caller than a named one they can look up.
+        features.sort(key=lambda f: (
+            round(f['properties']['distance_km'] * 2) / 2,
+            0 if _poi_name(f['properties']) else 1,
+            f['properties']['distance_km'],
+        ))
         if limit:
             features = features[:int(limit)]
         return features
@@ -1914,14 +1946,28 @@ def simple_mbtiles_server(
         url = photon_server.rstrip('/') + path
         try:
             resp = http_client.get(url, params=params, timeout=15.0)
+        except httpx.ConnectError as exc:
+            # Classic container pitfall: PHOTONSERVER resolves to a LAN
+            # address that the container network cannot route to. Say so,
+            # instead of leaking a bare "Connection refused".
+            raise ToolError(
+                'cannot reach the Photon server at %s (%s). If sms runs in a '
+                'container and PHOTONSERVER points into your LAN, the '
+                'container network has no route there -- try --network=host '
+                'or a Photon address reachable from inside the container.'
+                % (photon_server, exc))
+        except httpx.TimeoutException as exc:
+            raise ToolError('Photon server at %s timed out (%s)' % (photon_server, exc))
         except httpx.HTTPError as exc:
-            raise ToolError('photon request failed: %s' % exc)
+            raise ToolError('photon request to %s failed: %s' % (photon_server, exc))
         if resp.status_code != 200:
-            raise ToolError('photon returned HTTP %d' % resp.status_code)
+            raise ToolError('Photon server at %s returned HTTP %d'
+                            % (photon_server, resp.status_code))
         try:
             return resp.json()
         except ValueError:
-            raise ToolError('photon returned a non-JSON response')
+            raise ToolError('Photon server at %s returned a non-JSON response'
+                            % photon_server)
 
     def _photon_features(payload, limit):
         results = []
@@ -1981,7 +2027,7 @@ def simple_mbtiles_server(
             props = f['properties']
             coords = f['geometry']['coordinates']
             results.append({
-                'name': props.get('name'),
+                'name': _poi_name(props),
                 'lat': round(coords[1], 6),
                 'lon': round(coords[0], 6),
                 'category': props.get('subclass') or props.get('class'),
@@ -2225,12 +2271,21 @@ def simple_mbtiles_server(
 
     mcp_server.tool(
         'search_poi',
-        'Find points of interest around a coordinate, sorted by distance. '
-        'Categories: ' + ', '.join(sorted(_POI_CATEGORY_FILTERS)) + '. '
-        'Use alpine_hut to find huts, shelters and campsites for an overnight '
-        'stop, supermarket/pharmacy for resupply. Only POIs that are present in '
-        'the local vector tiles at zoom 14 are found, and opening hours, phone '
-        'numbers or capacity are NOT available.',
+        'Find points of interest around a coordinate, sorted by distance, '
+        'named POIs first within the same distance band. '
+        'Categories: ' + ', '.join(sorted(_POI_CATEGORY_FILTERS)) + '.\n'
+        '- alpine_hut: staffed and unstaffed mountain huts for an overnight '
+        'stop.\n'
+        '- camp_site: campsites and caravan sites.\n'
+        '- shelter: roofed spots WITHOUT accommodation -- this also contains '
+        'bus stop shelters and public air-raid shelters and is mostly '
+        'unnamed, so do not offer these as a place to sleep.\n'
+        '- supermarket, pharmacy, hospital, fuel, charging_station: resupply '
+        'and services.\n'
+        'Only POIs present in the local vector tiles at zoom 14 are found. '
+        'Opening hours, phone numbers, capacity and whether a hut is actually '
+        'staffed or open are NOT available -- tell the user to call ahead '
+        'before relying on a hut.',
         {
             'type': 'object',
             'properties': {

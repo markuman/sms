@@ -150,10 +150,20 @@ Search for Points of Interest (POI) within a radius and return GeoJSON features.
 **Query Parameters:**
 - `lat` — Latitude coordinate (required)
 - `lon` — Longitude coordinate (required)
-- `category` — POI category: `supermarket`, `pharmacy`, `hospital`, `fuel`, `charging_station`, or `alpine_hut` (required)
+- `category` — POI category (required): `supermarket`, `pharmacy`, `hospital`,
+  `fuel`, `charging_station`, `alpine_hut`, `camp_site`, or `shelter`
+
+  Note that `alpine_hut` covers only real mountain huts
+  (`alpine_hut`, `wilderness_hut`, `basic_hut`). OpenMapTiles files bus stop
+  shelters and public air-raid shelters under `subclass=shelter`, which around
+  Garmisch is 113 of 122 hits and mostly unnamed — those live in the separate
+  `shelter` category so they cannot bury the actual huts.
 - `radius` — Search radius in km, default 15, max 50 (optional)
 
-**Response:** GeoJSON FeatureCollection of POIs
+**Response:** GeoJSON FeatureCollection of POIs, each with a
+`properties.distance_km`. Sorted by distance, but named POIs come first
+within the same ~500 m band — an unnamed hut slightly closer is less useful
+than a named one you can look up.
 
 
 ### `GET /v1/tiles/{identifier}@{version}/{z}/{x}/{y}.mvt`

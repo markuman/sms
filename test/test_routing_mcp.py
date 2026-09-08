@@ -694,6 +694,64 @@ def test_search_poi_tool(server):
     assert body['results'][0]['distance_km'] >= 0
 
 
+def test_poi_categories_separate_huts_from_shelters():
+    """
+    OpenMapTiles files bus stop shelters and air-raid shelters under
+    subclass=shelter. Around Garmisch that is 113 of 122 hits, which buried
+    the four real huts beyond any result limit -- so `alpine_hut` must not
+    match `shelter`.
+    """
+    from simple_mbtiles_server.__main__ import _matches_poi_category
+
+    assert _matches_poi_category({'subclass': 'alpine_hut'}, 'alpine_hut')
+    assert _matches_poi_category({'subclass': 'wilderness_hut'}, 'alpine_hut')
+    assert not _matches_poi_category({'subclass': 'shelter'}, 'alpine_hut')
+    assert _matches_poi_category({'subclass': 'shelter'}, 'shelter')
+    assert _matches_poi_category({'subclass': 'camp_site'}, 'camp_site')
+    assert not _matches_poi_category({'subclass': 'camp_site'}, 'alpine_hut')
+
+
+def test_frontend_poi_categories_match_server():
+    """
+    The map UI carries its own copy of the category filters (it re-matches
+    subclasses client-side for marker colours). Those two lists silently
+    drifting apart means buttons that return nothing, so pin them together.
+    """
+    import re
+
+    from simple_mbtiles_server.__main__ import _POI_CATEGORY_FILTERS
+
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simple_mbtiles_server', 'vendor', 'index_with_photon.html')
+    with open(path, encoding='utf-8') as f:
+        html = f.read()
+
+    block = html.split('var POI_CATEGORIES = {', 1)[1].split('\n        };', 1)[0]
+    js_categories = set(re.findall(r'^          (\w+): \{', block, re.M))
+    buttons = set(re.findall(r'data-poi="(\w+)"', html))
+
+    assert js_categories == set(_POI_CATEGORY_FILTERS)
+    assert buttons == set(_POI_CATEGORY_FILTERS)
+
+    # a shelter must not be offered as a hut in either place
+    for category in ('alpine_hut', 'camp_site', 'shelter'):
+        match = re.search(r'%s: \{.*?indexOf\(p\.subclass\)' % category, block, re.S)
+        listed = set(re.findall(r"'([a-z_]+)'",
+                                match.group(0).split('[', 1)[1].split(']', 1)[0]))
+        assert listed == _POI_CATEGORY_FILTERS[category]['subclass'], category
+
+
+def test_poi_name_falls_back_to_localised_names():
+    """Many POIs carry name_de or name:latin but no plain name."""
+    from simple_mbtiles_server.__main__ import _poi_name
+
+    assert _poi_name({'name': 'Meilerhütte'}) == 'Meilerhütte'
+    assert _poi_name({'name_de': 'Weilheimer Hütte'}) == 'Weilheimer Hütte'
+    assert _poi_name({'name:latin': 'Knorrhütte'}) == 'Knorrhütte'
+    assert _poi_name({'subclass': 'shelter'}) is None
+
+
 def test_search_poi_rejects_unknown_category(server):
     body, is_error = call_tool('search_poi', {
         'center': [48.15, 11.57], 'category': 'biergarten',
