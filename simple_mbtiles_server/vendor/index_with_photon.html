@@ -1142,6 +1142,41 @@
           }
         };
 
+        // Deutsche Labels pro subclass. Dienen als Popup-Überschrift für
+        // namenlose POIs (statt des viel zu groben Kategorie-Titels --
+        // ein Defibrillator in der Stadt ist keine "Bergwacht") und als
+        // übersetzte Subzeile bei benannten POIs.
+        var SUBCLASS_LABELS = {
+          // supermarket
+          supermarket: 'Supermarkt', convenience: 'Kiosk / Minimarkt',
+          grocery: 'Lebensmittelladen', food: 'Lebensmittel',
+          // pharmacy / hospital
+          pharmacy: 'Apotheke', hospital: 'Krankenhaus', clinic: 'Klinik',
+          doctors: 'Arztpraxis', dentist: 'Zahnarzt',
+          // fuel / charging
+          fuel: 'Tankstelle', charging_station: 'Ladesäule',
+          // huts / camping / shelter
+          alpine_hut: 'Berghütte', wilderness_hut: 'Selbstversorgerhütte',
+          basic_hut: 'Einfache Schutzhütte',
+          camp_site: 'Campingplatz', caravan_site: 'Wohnmobilstellplatz',
+          camp_pitch: 'Zeltplatz',
+          shelter: 'Unterstand', lean_to: 'Offener Unterstand',
+          picnic_site: 'Rastplatz',
+          // water
+          drinking_water: 'Trinkwasserstelle', water_point: 'Wasserstelle',
+          water_well: 'Brunnen', water_tap: 'Wasserhahn', spring: 'Quelle',
+          spring_box: 'Quellfassung', watering_place: 'Tränke',
+          cistern: 'Zisterne',
+          // cave / viewpoint
+          cave_entrance: 'Höhleneingang', sinkhole: 'Doline',
+          viewpoint: 'Aussichtspunkt', peak: 'Gipfel', saddle: 'Sattel / Pass',
+          tower: 'Turm', arch: 'Felsbogen', volcano: 'Vulkan',
+          // emergency
+          phone: 'Notruftelefon', access_point: 'Rettungspunkt',
+          defibrillator: 'Defibrillator', life_ring: 'Rettungsring',
+          mountain_rescue: 'Bergwacht', ranger_station: 'Rangerstation'
+        };
+
         // --- Koordinaten-Formate -------------------------------------------
         // Format wird in localStorage gehalten, damit es einen Reload übersteht.
         var COORD_FORMATS = {
@@ -1295,11 +1330,14 @@
           var p      = f.properties || {};
           // OpenMapTiles verteilt Namen auf name, name_de, name:latin, ...
           // Viele POIs (vor allem Unterstände) haben gar keinen Namen.
+          // Namenlose bekommen das subclass-Label als Überschrift
+          // (z.B. "Defibrillator" statt pauschal "Notruf / Bergwacht").
+          var subLabel = SUBCLASS_LABELS[p.subclass] || p.subclass;
           var name   = p.name || p.name_de || p['name:de'] || p['name:latin']
-                    || p.name_en || p['name:en'] || cat.title;
+                    || p.name_en || p['name:en'] || subLabel || cat.title;
           var coords = f.geometry.coordinates;
           var popup  = new maplibregl.Popup({ offset: [0, -28], closeOnClick: false })
-            .setHTML(poiPopupHtml(name, p.subclass, null, coords[1], coords[0]));
+            .setHTML(poiPopupHtml(name, subLabel, null, coords[1], coords[0]));
           // Adresse lazy via Photon Reverse nachladen
           popup.on('open', function() {
             if (popup._photonLoaded) return;
@@ -1309,7 +1347,7 @@
               .then(function(r) { return r.json(); })
               .then(function(data) {
                 var addr = (data.features && data.features[0]) ? data.features[0].properties : null;
-                popup.setHTML(poiPopupHtml(name, p.subclass, addr, coords[1], coords[0]));
+                popup.setHTML(poiPopupHtml(name, subLabel, addr, coords[1], coords[0]));
               })
               .catch(function() {});
           });
