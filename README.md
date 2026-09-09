@@ -7,15 +7,15 @@
 ```
 mkdir osm
 wget --continue -O osm/planet.mbtiles https://osm.osuv.de/planet.mbtiles
-wget --continue -O osm/contours.mbtiles https://nx93856.your-storageshare.de/public.php/dav/files/apP4zEacCwqPfWd/contours_90m-Z11-Z13_30m-Z14.mbtiles
+wget --continue -O osm/contours.mbtiles https://osm.osuv.de/contours.mbtiles
 podman run -ti --rm -p 9000:9000 --name sms -v "$(pwd)/osm/:/data/" registry.gitlab.com/markuman/sms:latest
 firefox http://localhost:9000
 ```
 
 requirements: 
 * `podman` (_or `docker`_)
-* 100 GB storage is required (_1 core and 512MB memory are sufficient_)
-* optional 315 GB storage is required for contour lines
+* 101 GB storage is required (_1 core and 512MB memory are sufficient_)
+* optional 290 GB storage is required for contour lines
 
 notes:
 * "_~30 minutes_" depends on your bandwidth ...and the hidrive performance of ionos.
