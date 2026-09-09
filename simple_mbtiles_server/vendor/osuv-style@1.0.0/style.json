@@ -22,9 +22,9 @@
       "paint": {
         "background-color": [
           "interpolate", ["linear"], ["zoom"],
-          0, "#e8f0d8",
-          6, "#e8f0d8",
-          7, "#f5f0e8"
+          0, "#ebefe0",
+          6, "#ebefe0",
+          7, "#f6f4ee"
         ]
       }
     },
@@ -36,7 +36,7 @@
       "source-layer": "water",
       "maxzoom": 7,
       "paint": {
-        "fill-color": "#a8cfe0",
+        "fill-color": "#a9c9dc",
         "fill-opacity": 1
       }
     },
@@ -48,7 +48,7 @@
       "source-layer": "water",
       "minzoom": 7,
       "paint": {
-        "fill-color": "#6fb3d2",
+        "fill-color": "#8fc0da",
         "fill-opacity": 1
       }
     },
@@ -65,7 +65,7 @@
         "line-join": "round"
       },
       "paint": {
-        "line-color": "#6fb3d2",
+        "line-color": "#8fc0da",
         "line-width": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 3]
       }
     },
@@ -81,8 +81,8 @@
         "line-join": "round"
       },
       "paint": {
-        "line-color": "#3a90c0",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 16, 2.5]
+        "line-color": "#74aecb",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 16, 2]
       }
     },
 
@@ -94,8 +94,8 @@
       "minzoom": 7,
       "filter": ["==", "class", "wood"],
       "paint": {
-        "fill-color": "#aed09e",
-        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 7, 0.7, 12, 0.9]
+        "fill-color": "#c2d9b2",
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 7, 0.65, 12, 0.85]
       }
     },
     {
@@ -106,8 +106,20 @@
       "minzoom": 7,
       "filter": ["in", "class", "grass", "meadow"],
       "paint": {
-        "fill-color": "#d6edbf",
-        "fill-opacity": 0.8
+        "fill-color": "#dcead0",
+        "fill-opacity": 0.75
+      }
+    },
+    {
+      "id": "landcover-rock",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "landcover",
+      "minzoom": 9,
+      "filter": ["in", "class", "rock", "bare_rock", "scree"],
+      "paint": {
+        "fill-color": "#e3e0da",
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 9, 0.5, 12, 0.85]
       }
     },
     {
@@ -117,7 +129,7 @@
       "source-layer": "landcover",
       "filter": ["in", "class", "ice", "snow"],
       "paint": {
-        "fill-color": "#e8f4f8",
+        "fill-color": "#eef5f8",
         "fill-opacity": 0.9
       }
     },
@@ -129,7 +141,7 @@
       "minzoom": 7,
       "filter": ["in", "class", "sand", "beach"],
       "paint": {
-        "fill-color": "#f5e9c8",
+        "fill-color": "#f0e8d4",
         "fill-opacity": 0.8
       }
     },
@@ -142,8 +154,8 @@
       "minzoom": 7,
       "filter": ["in", "class", "park", "pitch", "playground", "nature_reserve", "national_park"],
       "paint": {
-        "fill-color": "#c4e0b0",
-        "fill-opacity": 0.8
+        "fill-color": "#cfe3bd",
+        "fill-opacity": 0.6
       }
     },
     {
@@ -205,7 +217,7 @@
       "filter": ["==", "class", "motorway"],
       "layout": {"line-cap": "butt", "line-join": "miter"},
       "paint": {
-        "line-color": "#e0a040",
+        "line-color": "#d99f66",
         "line-width": ["interpolate", ["linear"], ["zoom"], 7, 1, 14, 10]
       }
     },
@@ -218,7 +230,7 @@
       "filter": ["==", "class", "motorway"],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#fcc060",
+        "line-color": "#f7c98d",
         "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 14, 7]
       }
     },
@@ -231,7 +243,7 @@
       "filter": ["==", "class", "trunk"],
       "layout": {"line-cap": "butt", "line-join": "miter"},
       "paint": {
-        "line-color": "#d89a30",
+        "line-color": "#d3a56e",
         "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 14, 9]
       }
     },
@@ -244,7 +256,7 @@
       "filter": ["==", "class", "trunk"],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#f8d070",
+        "line-color": "#f5d5a0",
         "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 14, 6]
       }
     },
@@ -257,7 +269,7 @@
       "filter": ["==", "class", "primary"],
       "layout": {"line-cap": "butt", "line-join": "miter"},
       "paint": {
-        "line-color": "#c8882a",
+        "line-color": "#c8a878",
         "line-width": ["interpolate", ["linear"], ["zoom"], 9, 1, 14, 8]
       }
     },
@@ -270,7 +282,7 @@
       "filter": ["==", "class", "primary"],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#fde090",
+        "line-color": "#fbe7bc",
         "line-width": ["interpolate", ["linear"], ["zoom"], 9, 0.5, 14, 5]
       }
     },
@@ -283,7 +295,7 @@
       "filter": ["==", "class", "secondary"],
       "layout": {"line-cap": "butt", "line-join": "miter"},
       "paint": {
-        "line-color": "#b8b090",
+        "line-color": "#c2bda8",
         "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 6]
       }
     },
@@ -296,7 +308,7 @@
       "filter": ["==", "class", "secondary"],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#fffacc",
+        "line-color": "#fdf6dd",
         "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 4]
       }
     },
@@ -309,7 +321,7 @@
       "filter": ["in", "class", "tertiary", "unclassified"],
       "layout": {"line-cap": "butt", "line-join": "miter"},
       "paint": {
-        "line-color": "#aaaaaa",
+        "line-color": "#c0bcb4",
         "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1.5, 14, 6]
       }
     },
@@ -467,9 +479,10 @@
       ],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#9b30d0",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 1.5, 12, 3.5],
-        "line-dasharray": [4, 2]
+        "line-color": "#9a8fa8",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 1.2, 12, 2.5],
+        "line-dasharray": [4, 2],
+        "line-opacity": 0.8
       }
     },
     {
@@ -484,9 +497,10 @@
       ],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#b060e0",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.8, 12, 2],
-        "line-dasharray": [3, 3]
+        "line-color": "#b0a8bc",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.7, 12, 1.6],
+        "line-dasharray": [3, 3],
+        "line-opacity": 0.7
       }
     },
 
@@ -576,6 +590,42 @@
         "text-color": "#1a4a1a",
         "text-halo-color": "rgba(255,255,255,0.85)",
         "text-halo-width": 2
+      }
+    },
+
+    {
+      "id": "mountain-peak",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "mountain_peak",
+      "minzoom": 10,
+      "filter": ["all",
+        ["==", "$type", "Point"],
+        ["in", "class", "peak", "volcano"]
+      ],
+      "layout": {
+        "text-field": [
+          "case",
+          ["all", ["has", "name"], ["has", "ele"]],
+          ["concat", "▲\n", ["coalesce", ["get", "name:latin"], ["get", "name"]], "\n", ["get", "ele"], " m"],
+          ["has", "name"],
+          ["concat", "▲\n", ["coalesce", ["get", "name:latin"], ["get", "name"]]],
+          ["has", "ele"],
+          ["concat", "▲\n", ["get", "ele"], " m"],
+          "▲"
+        ],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 10, 10, 14, 12],
+        "text-line-height": 1.15,
+        "text-anchor": "top",
+        "text-offset": [0, -0.6],
+        "text-max-width": 9,
+        "symbol-sort-key": ["get", "rank"]
+      },
+      "paint": {
+        "text-color": "#5a4a3a",
+        "text-halo-color": "rgba(255,255,255,0.85)",
+        "text-halo-width": 1.5
       }
     },
 
