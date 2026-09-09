@@ -147,7 +147,7 @@
       #route-profile, #route-sac {
         display: none;
       }
-      #route-ferrata-label {
+      #route-ferrata-label, #route-marked-label {
         display: none;
         align-items: center;
         gap: 4px;
@@ -157,7 +157,9 @@
         cursor: pointer;
         padding: 0 4px;
       }
-      #route-ferrata-label input { cursor: pointer; margin: 0; }
+      #route-ferrata-label input, #route-marked-label input {
+        cursor: pointer; margin: 0;
+      }
       #route-warnings {
         display: none;
         max-width: 340px;
@@ -337,6 +339,9 @@
       </select>
       <label id="route-ferrata-label" title="Klettersteige und Leitern aus der Route ausschließen">
         <input type="checkbox" id="route-no-ferrata" checked> ohne Klettersteig
+      </label>
+      <label id="route-marked-label" title="Markierte Wanderwege bevorzugen (E3, Malerweg, Via Alpina …). Nur eine Gewichtung — unmarkierte Wege bleiben nutzbar.">
+        <input type="checkbox" id="route-prefer-routes" checked> markierte Wege
       </label>
       <button id="sac-legend-btn" class="toolbar-btn" title="Legende: Wegschwierigkeit (SAC-Skala)">🗺️ SAC</button>
       <span id="route-status"></span>
@@ -699,9 +704,10 @@
           routeTotalMin = 0;
           routeEle      = null;
           routeWarnings = [];
+          routeNames = [];
           renderRouteWarnings();
           document.getElementById('route-btn').classList.remove('active');
-          ['route-profile','route-sac','route-ferrata-label','route-warnings'].forEach(function(id) {
+          ['route-profile','route-sac','route-ferrata-label','route-marked-label','route-warnings'].forEach(function(id) {
             var el = document.getElementById(id);
             if (el) el.style.display = 'none';
           });
@@ -744,16 +750,29 @@
         }
 
         var routeWarnings = [];
+        // Markierte Wanderwege, auf denen die Route läuft
+        var routeNames = [];
 
         function renderRouteWarnings() {
           var box = document.getElementById('route-warnings');
           if (!box) return;
-          if (routeWarnings.length === 0) {
+          if (routeWarnings.length === 0 && routeNames.length === 0) {
             box.style.display = 'none';
             box.innerHTML = '';
             return;
           }
-          var html = routeWarnings.slice(0, 4).map(function(w) {
+          var html = '';
+          if (routeNames.length) {
+            var top = routeNames.slice().sort(function(a, b) {
+              return b.segments - a.segments;
+            }).slice(0, 3);
+            html += '<div style="color:#1f2937;margin-bottom:4px">🥾 ' +
+              top.map(function(r) {
+                var net = r.network ? ' <span style="color:#9ca3af">(' + r.network + ')</span>' : '';
+                return r.label + net;
+              }).join(', ') + '</div>';
+          }
+          html += routeWarnings.slice(0, 4).map(function(w) {
             return '⚠️ ' + w.replace(/(https:\/\/www\.openstreetmap\.org\/way\/\d+)/,
               '<a href="$1" target="_blank" rel="noopener">OSM</a>');
           }).join('<br>');
@@ -774,6 +793,8 @@
             '&profile=' + profile;
           if (maxSac) url += '&max_sac_scale=' + maxSac;
           if (noFerrata) url += '&allow_via_ferrata=false';
+          if (document.getElementById('route-prefer-routes').checked)
+            url += '&prefer_routes=true';
           setRouteStatus('Berechne Route …');
           fetch(url)
             .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
@@ -786,6 +807,15 @@
               var props = res.body.properties || {};
               (props.terrain_warnings || []).forEach(function(w) {
                 if (routeWarnings.indexOf(w) === -1) routeWarnings.push(w);
+              });
+              // Markierte Wanderwege sammeln (nach Anteil, gröbster zuerst)
+              (props.routes || []).forEach(function(r) {
+                var label = r.name || r.ref;
+                if (!label) return;
+                var known = routeNames.filter(function(x) { return x.label === label; })[0];
+                if (known) { known.segments += r.segments; return; }
+                routeNames.push({ label: label, network: r.network,
+                                  segments: r.segments });
               });
               renderRouteWarnings();
               onSuccess(res.body);
@@ -854,6 +884,7 @@
             document.getElementById('route-profile').style.display = '';
             document.getElementById('route-sac').style.display = '';
             document.getElementById('route-ferrata-label').style.display = 'inline-flex';
+          document.getElementById('route-marked-label').style.display = 'inline-flex';
             map.getCanvasContainer().classList.add('route-active');
             map.on('click', onRouteClick);
             setRouteStatus('Startpunkt klicken');
@@ -866,6 +897,7 @@
           var points = routePoints.slice();
           routeSegments = [];
           routeWarnings = [];
+          routeNames = [];
           renderRouteWarnings();
           routeTotalKm  = 0;
           routeTotalMin = 0;
@@ -894,7 +926,8 @@
           fetchNext(0);
         }
 
-        ['route-profile', 'route-sac', 'route-no-ferrata'].forEach(function(id) {
+        ['route-profile', 'route-sac', 'route-no-ferrata',
+         'route-prefer-routes'].forEach(function(id) {
           document.getElementById(id).addEventListener('change', recalcRoute);
         });
 

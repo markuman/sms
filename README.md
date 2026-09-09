@@ -349,6 +349,10 @@ No external routing engine required — routing is performed entirely server-sid
   hiking attributes (optional)
 - `allow_via_ferrata` — `false` excludes ways tagged as via ferrata or with
   fixed ladders (optional, default `true`)
+- `prefer_routes` — `true` prefers ways carrying a marked hiking route
+  (`iwn`/`nwn`/`rwn`/`lwn`), or a cycle route for `profile=bike` (optional)
+- `follow_route` — follow one named route, e.g. `Malerweg` or the ref `E3`
+  (optional)
 
   Note these are **independent axes**: a way can be T6 scrambling without any
   ferrata tag, and a cabled route can be tagged T2. On a real Zugspitze test,
@@ -442,6 +446,54 @@ exactly as before. That is deliberate — most of the world has no `sac_scale`,
 and excluding untagged ways would produce empty results while pretending to be
 safe. An untagged path can be anything.
 
+### Marked hiking routes
+
+OpenMapTiles flattens route relations into `route_1_*` … `route_4_*` on the
+`transportation_name` layer, so the tiles know which ways carry the E3, the
+Malerweg, a Via Alpina stage or a local marked trail. A way on a marked route
+is signposted, maintained and usually the scenic line, so `prefer_routes=true`
+gives those a weight discount, ordered by network importance:
+
+| Network | Meaning | Factor |
+|---|---|---|
+| `iwn` / `icn` | international | 0.70 |
+| `nwn` / `ncn` | national | 0.72 |
+| `rwn` / `rcn` | regional | 0.78 |
+| `lwn` / `lcn` | local | 0.85 |
+
+Road route relations (`DE:national`, `cz:regional`, `e-road`) are *not*
+weighted — those are road numbers, not trails.
+
+`follow_route=Forststeig` pulls much harder (factor 0.25) towards one specific
+route. This exists because plain waypoint routing cuts the loops a marked
+trail makes: on the Forststeig Elbsandstein the rock-group detours
+(Müllerstein, Rotstein, Spanghorn) are skipped unless every one of them is a
+waypoint. Measured on that trail:
+
+| | Distance | Routes followed |
+|---|---|---|
+| plain | 13.11 km | — |
+| `prefer_routes` | 13.11 km | Gelber Balken 49 %, Roter Punkt 32 % |
+| `follow_route=Forststeig` | 14.83 km | **Forststeig Elbsandstein 28 %** |
+
+Both are **weightings, not filters**: unmarked ways stay available, so a
+region without marked routes still routes normally. `follow_route` returns a
+`404` if no such route exists in the corridor, and a `terrain_warnings` entry
+if the route exists but does not connect the two points.
+
+The response lists the routes actually used under `properties.routes` with the
+share of the track:
+
+```json
+"routes": [
+  { "network": "rwn", "network_label": "regional",
+    "name": "Forststeig Elbsandstein", "segments": 68, "share_percent": 28 }
+]
+```
+
+Route geometry lives in its own generalised layer, so routes are matched to
+graph edges by proximity (~200 m grid on the segment midpoints).
+
 ### Tile selection: corridor instead of bounding box
 
 Tiles are loaded as a **corridor along the straight line** between the two
@@ -533,8 +585,35 @@ Generated files are cleaned up automatically: anything older than
 The map UI exposes the same knobs: a transport dropdown (hiking / bike), a
 difficulty dropdown (T1–T6, default "egal"/any) and an "ohne Klettersteig"
 checkbox which is **on by default** — a hiking UI should not silently route
-over a via ferrata. Changing any of them recalculates all segments, and
+over a via ferrata — plus a "markierte Wege" checkbox (also on by default)
+for `prefer_routes`. The names of the marked trails the route follows are
+shown below the toolbar. Changing any of them recalculates all segments, and
 `terrain_warnings` are shown below the toolbar with the OSM way linked.
+
+## Caching
+
+Tiles are the hot path — a single pan fetches dozens of them — so everything
+that can be cached is cached, and everything dynamic explicitly is not:
+
+| Endpoint | `Cache-Control` | Why |
+|---|---|---|
+| `/v1/tiles/…` | `public, max-age=604800, stale-while-revalidate=86400` | immutable per dataset, ETag catches rebuilds |
+| `/v1/tiles/…` (404) | `public, max-age=3600` | ocean and out-of-extract tiles 404 on every pan |
+| `/v1/static/…`, `/v1/fonts/…`, sprites | `public, max-age=31536000, immutable` | version is part of the URL |
+| `/v1/styles/…/style.json` | `public, max-age=3600` | embeds request-derived URLs |
+| `/v1/gpx/<id>.gpx` | `private, max-age=86400` | stable per id, but user generated |
+| `/` | `no-cache` | rewritten by `startup.sh`, revalidates via ETag |
+| `/v1/route`, `/v1/poi`, `/v1/capabilities`, `/mcp` | `no-store` | a stale route is worse than a recomputed one |
+
+**Tile ETags are `<dataset>-<z>-<x>-<y>`**, where `dataset` is a fingerprint of
+the `.mbtiles` file (mtime and size). Rebuilding the dataset therefore
+invalidates every cached tile automatically — no version to bump, no cache to
+purge. A revalidation costs one conditional request and returns `304` with an
+empty body; measured over 20 tiles: 250 kB and 763 ms down to 0 kB and 9 ms,
+and within `max-age` the browser does not even ask.
+
+The ETag is checked *before* touching SQLite, so a revalidation is answered
+without a database read.
 
 ## MCP API (route planning for LLM agents)
 

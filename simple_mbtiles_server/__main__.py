@@ -603,6 +603,79 @@ def _alpine_name_warning(name):
     return None
 
 
+# OSM hiking route networks, best first. A way that carries a marked hiking
+# route is almost always the better choice than an unmarked shortcut: it is
+# signposted, maintained and usually the scenic line.
+#
+# iwn/nwn/rwn/lwn = international / national / regional / local walking
+# network. Cycle equivalents (icn..lcn) matter for the bike profile.
+_HIKING_NETWORKS = ('iwn', 'nwn', 'rwn', 'lwn')
+_CYCLE_NETWORKS = ('icn', 'ncn', 'rcn', 'lcn')
+
+# Weight multipliers when prefer_routes is on. Below 1.0 means "cheaper", so
+# A* prefers these ways; the values are deliberately mild so a marked route is
+# not followed into a huge detour.
+_ROUTE_PREFERENCE = {
+    'iwn': 0.70, 'nwn': 0.72, 'rwn': 0.78, 'lwn': 0.85,
+    'icn': 0.70, 'ncn': 0.72, 'rcn': 0.78, 'lcn': 0.85,
+}
+
+# Strong pull when the user asked to follow one specific route.
+_FOLLOW_ROUTE_FACTOR = 0.25
+
+
+def _route_entries(props):
+    """
+    Extract (network, ref, name) for every route relation on a way.
+
+    OpenMapTiles flattens route relations into route_1_* .. route_4_* on the
+    transportation_name layer, so a way carrying three routes has three sets.
+    """
+    entries = []
+    for index in range(1, 5):
+        network = props.get('route_%d_network' % index)
+        ref = props.get('route_%d_ref' % index)
+        name = props.get('route_%d_name' % index)
+        if not (network or ref or name):
+            continue
+        entries.append((network or '', ref or '', name or ''))
+    return entries
+
+
+def _route_matches(entry, query):
+    """
+    Whether a route entry matches a user query like "Malerweg" or "E3".
+
+    Matches the ref exactly (case insensitive) or the name as a substring,
+    because OSM names carry suffixes ("Malerweg (Etappe 3)").
+    """
+    _network, ref, name = entry
+    needle = query.strip().lower()
+    if not needle:
+        return False
+    if ref and ref.strip().lower() == needle:
+        return True
+    return bool(name) and needle in name.lower()
+
+
+# Cache lifetimes. Tiles, fonts and the vendored JS/CSS are immutable for a
+# given dataset: the only way their content changes is a rebuild of the
+# .mbtiles file, and that changes the ETag (derived from the file mtime), so
+# a long max-age is safe and saves a request per tile on every pan and zoom.
+_CACHE_TILES = 'public, max-age=604800, stale-while-revalidate=86400'   # 7 d
+_CACHE_IMMUTABLE = 'public, max-age=31536000, immutable'                # 1 a
+_CACHE_STYLE = 'public, max-age=3600'                                   # 1 h
+_CACHE_NONE = 'no-store'
+
+
+def _cache_headers(cache_control, etag=None):
+    """Build cache headers; ETag lets the client revalidate cheaply."""
+    headers = {'cache-control': cache_control}
+    if etag:
+        headers['etag'] = '"%s"' % etag
+    return headers
+
+
 # Terrain attributes OpenMapTiles does carry on the transportation layer.
 # Verified against real tiles (Ammergau Alps, z14): surface and mtb_scale show
 # up, sac_scale / trail_visibility / via_ferrata_scale / access do NOT exist in
@@ -709,10 +782,12 @@ def _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
 def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
     """
     Parse a raw MVT blob and extract every usable transportation segment.
-    Returns (segments, named_ways):
+    Returns (segments, named_ways, route_ways):
     segments   -- list of (node_a, node_b, dist_km, road_class, hints)
     named_ways -- (lon_e5, lat_e5, name) for ways whose *name* suggests
                   exposed terrain (see _alpine_name_warning)
+    route_ways -- (lon_e5, lat_e5, (network, ref, name)) for ways carrying a
+                  marked route relation (E3, Malerweg, Via Alpina, ...)
 
     Nodes are (lon_e5, lat_e5) integer tuples (about 1 m resolution).  The
     routing profile is deliberately *not* applied here, so a cached tile can
@@ -731,6 +806,7 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
 
     segments = []
     named_ways = []
+    route_ways = []
     pos = 0
 
     while pos < len(data):
@@ -762,13 +838,18 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
                         if k < len(keys) and v < len(values):
                             props[keys[k]] = values[v]
                     name = props.get('name')
-                    if not name or not _alpine_name_warning(name):
+                    entries = _route_entries(props)
+                    alpine = bool(name) and bool(_alpine_name_warning(name))
+                    if not alpine and not entries:
                         continue
                     for coords in _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
                         for point in coords:
-                            named_ways.append(
-                                (int(round(point[0] * _E5)),
-                                 int(round(point[1] * _E5)), name))
+                            lon_e5 = int(round(point[0] * _E5))
+                            lat_e5 = int(round(point[1] * _E5))
+                            if alpine:
+                                named_ways.append((lon_e5, lat_e5, name))
+                            for entry in entries:
+                                route_ways.append((lon_e5, lat_e5, entry))
                 continue
             if layer_name != 'transportation':
                 continue
@@ -808,7 +889,7 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
         elif wire == 1:
             pos += 8
 
-    return segments, named_ways
+    return segments, named_ways, route_ways
 
 
 def _extract_contour_lines(raw_tile, tile_x, tile_y, zoom):
@@ -1057,6 +1138,63 @@ def _duration_min(profile, dist_km, ascent_m=None, descent_m=None):
     return max(flat, vertical) + min(flat, vertical) / 2.0
 
 
+_ROUTE_CELL = 0.002  # ~200 m grid for route matching
+
+
+def _build_route_index(route_ways, cell=_ROUTE_CELL):
+    """
+    Bucket route geometry into a coarse grid.
+
+    transportation_name carries its own generalised geometry, not the routing
+    graph's nodes, so routes can only be matched by proximity.  A ~200 m grid
+    keeps that linear instead of nodes x route_points.
+    """
+    index = {}
+    for lon_e5, lat_e5, entry in route_ways:
+        lon = lon_e5 / _E5
+        lat = lat_e5 / _E5
+        index.setdefault((int(lon / cell), int(lat / cell)), set()).add(entry)
+    return index
+
+
+def _routes_at(index, lon, lat, cell=_ROUTE_CELL):
+    """Route entries whose geometry passes near (lon, lat)."""
+    cx = int(lon / cell)
+    cy = int(lat / cell)
+    found = set()
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            bucket = index.get((cx + dx, cy + dy))
+            if bucket:
+                found |= bucket
+    return found
+
+
+def _route_factor(entries, profile, follow_query=None):
+    """
+    Weight multiplier for a segment based on the marked routes on it.
+
+    Returns 1.0 when nothing applies.  When *follow_query* is given, only
+    matching routes get the strong discount -- everything else stays neutral,
+    so the route is a preference and never makes the graph unroutable.
+    """
+    if not entries:
+        return 1.0
+
+    if follow_query:
+        for entry in entries:
+            if _route_matches(entry, follow_query):
+                return _FOLLOW_ROUTE_FACTOR
+        return 1.0
+
+    wanted = _CYCLE_NETWORKS if profile == 'bike' else _HIKING_NETWORKS
+    best = 1.0
+    for network, _ref, _name in entries:
+        if network in wanted:
+            best = min(best, _ROUTE_PREFERENCE.get(network, 1.0))
+    return best
+
+
 def _hint_penalty(hints, profile):
     """
     Extra weight factor from terrain attributes, or None when the segment is
@@ -1106,18 +1244,26 @@ def _segment_too_hard(hints, max_sac_rank, allow_via_ferrata):
     return False
 
 
-def _build_graph(all_segments, profile, max_sac_scale=None, allow_via_ferrata=True):
+def _build_graph(all_segments, profile, max_sac_scale=None, allow_via_ferrata=True,
+                 route_index=None, prefer_routes=False, follow_route=None):
     """
     Build a bidirectional adjacency graph for *profile*.
 
     all_segments is the profile-agnostic output of _extract_road_segments;
     the per-class weight factor is applied here.  Result maps
     node -> [(neighbour, weighted_km, real_km), ...].
+
+    With *prefer_routes* (or *follow_route*), segments carrying a marked
+    hiking/cycling route get a weight discount from *route_index*.  This is
+    only ever a preference: no segment is removed, so a region without marked
+    routes still routes normally.
     """
     weights = _ROUTING_PROFILES.get(profile, _ROUTING_PROFILES['foot'])
     max_sac_rank = _SAC_SCALE_RANK.get(max_sac_scale) if max_sac_scale else None
+    use_routes = bool(route_index) and (prefer_routes or follow_route)
     graph = {}
     edge_hints = {}
+    edge_routes = {}
     for segment in all_segments:
         node_a, node_b, dist, road_class = segment[:4]
         hints = segment[4] if len(segment) > 4 else ()
@@ -1129,13 +1275,78 @@ def _build_graph(all_segments, profile, max_sac_scale=None, allow_via_ferrata=Tr
         penalty = _hint_penalty(hints, profile)
         if penalty is None:
             continue
-        weighted = dist * factor * penalty
+
+        key = (node_a, node_b) if node_a < node_b else (node_b, node_a)
+        route_factor = 1.0
+        if use_routes:
+            # match on the segment midpoint: route geometry is generalised,
+            # so endpoints can sit just outside the grid cell
+            mid_lon = (node_a[0] + node_b[0]) / 2.0 / _E5
+            mid_lat = (node_a[1] + node_b[1]) / 2.0 / _E5
+            entries = _routes_at(route_index, mid_lon, mid_lat)
+            if entries:
+                route_factor = _route_factor(entries, profile, follow_route)
+                edge_routes[key] = entries
+
+        weighted = dist * factor * penalty * route_factor
         graph.setdefault(node_a, []).append((node_b, weighted, dist))
         graph.setdefault(node_b, []).append((node_a, weighted, dist))
         if hints:
-            key = (node_a, node_b) if node_a < node_b else (node_b, node_a)
             edge_hints[key] = (road_class, hints)
-    return graph, edge_hints
+    return graph, edge_hints, edge_routes
+
+
+_NETWORK_LABEL = {
+    'iwn': 'international', 'nwn': 'national',
+    'rwn': 'regional', 'lwn': 'local',
+    'icn': 'international cycle', 'ncn': 'national cycle',
+    'rcn': 'regional cycle', 'lcn': 'local cycle',
+}
+
+
+def _routes_along_path(path_coords, edge_routes, min_edges=2, walkable_only=True):
+    """
+    Marked routes the finished path actually runs on, longest share first.
+
+    *min_edges* filters out routes that only brush the path for a single
+    segment -- with generalised route geometry those are usually crossings,
+    not shared sections.
+
+    *walkable_only* keeps road route relations out of the report. A path can
+    share geometry with "cz:national 62" or "DE:national B 23"; those are
+    road numbers, they are never weighted (see _ROUTE_PREFERENCE) and listing
+    them as "routes followed" is just noise.
+    """
+    if not edge_routes:
+        return []
+
+    counts = {}
+    for i in range(len(path_coords) - 1):
+        a = (int(round(path_coords[i][0] * _E5)), int(round(path_coords[i][1] * _E5)))
+        b = (int(round(path_coords[i + 1][0] * _E5)),
+             int(round(path_coords[i + 1][1] * _E5)))
+        for entry in edge_routes.get((a, b) if a < b else (b, a), ()):
+            counts[entry] = counts.get(entry, 0) + 1
+
+    out = []
+    total = max(1, len(path_coords) - 1)
+    for (network, ref, name), count in sorted(
+            counts.items(), key=lambda kv: kv[1], reverse=True):
+        if count < min_edges:
+            continue
+        if walkable_only and network and network not in _ROUTE_PREFERENCE:
+            continue
+        item = {'segments': count, 'share_percent': round(count * 100.0 / total)}
+        if network:
+            item['network'] = network
+            if network in _NETWORK_LABEL:
+                item['network_label'] = _NETWORK_LABEL[network]
+        if ref:
+            item['ref'] = ref
+        if name:
+            item['name'] = name
+        out.append(item)
+    return out[:12]
 
 
 def _difficulty_tagged_indices(path_coords, edge_hints):
@@ -1576,11 +1787,25 @@ def simple_mbtiles_server(
             f.extractall(tempdir)
         return tempdir
 
+    def dataset_version(path):
+        """
+        Short fingerprint of an .mbtiles file, used in ETags.
+
+        Derived from mtime and size, so rebuilding the dataset invalidates
+        every cached tile without touching any client configuration.
+        """
+        try:
+            stat = os.stat(path)
+            return '%x-%x' % (int(stat.st_mtime), stat.st_size)
+        except OSError:
+            return 'unknown'
+
     mbtiles_dict = {
         (mbtile['IDENTIFIER'], mbtile['VERSION']): {
             'db_connection': sqlite3.connect(mbtile['URL']),
             'min_zoom': int(mbtile['MIN_ZOOM']),
             'max_zoom': int(mbtile['MAX_ZOOM']),
+            'version': dataset_version(mbtile['URL']),
         }
         for mbtile in mbtiles
     }
@@ -1594,6 +1819,7 @@ def simple_mbtiles_server(
                 contours_dict = {
                     'db_connection': sqlite3.connect(contours_path),
                     'url': contours_path,
+                    'version': dataset_version(contours_path),
                 }
 
     styles_dict = {
@@ -1681,11 +1907,20 @@ def simple_mbtiles_server(
     def get_tile(identifier, version, z, x, y):
         if identifier == 'contours' and version == '1.0.0' and contours_dict:
             db_connection = contours_dict['db_connection']
+            dataset = contours_dict.get('version', 'unknown')
         else:
             try:
-                db_connection = mbtiles_dict[(identifier, version)]['db_connection']
+                entry = mbtiles_dict[(identifier, version)]
             except KeyError:
                 return Response(status=404)
+            db_connection = entry['db_connection']
+            dataset = entry.get('version', 'unknown')
+
+        # A tile is fully identified by dataset version and coordinates, so we
+        # can answer a revalidation without touching SQLite at all.
+        etag = '%s-%d-%d-%d' % (dataset, z, x, y)
+        if request.if_none_match and etag in request.if_none_match:
+            return Response(status=304, headers=_cache_headers(_CACHE_TILES, etag))
 
         tile_data = None
         y_tms = (2**z - 1) - y
@@ -1715,15 +1950,19 @@ def simple_mbtiles_server(
         def ungzip(data):
             return zlib.decompress(data, wbits=32 + zlib.MAX_WBITS)
 
-        return \
-            Response(status=200, response=ungzip(tile_data), headers={
-                'content-type': 'application/vnd.mapbox-vector-tile',
-            }) if tile_data is not None and not allows_gzip else \
-            Response(status=200, response=tile_data, headers={
-                'content-encoding': 'gzip',
-                'content-type': 'application/vnd.mapbox-vector-tile',
-            }) if tile_data is not None else \
-            Response(status=404)
+        if tile_data is None:
+            # Missing tiles are normal (ocean, outside the extract) and the
+            # client asks for them again on every pan, so let it cache the 404
+            # too -- just for a shorter time.
+            return Response(status=404, headers={'cache-control': 'public, max-age=3600'})
+
+        headers = _cache_headers(_CACHE_TILES, etag)
+        headers['content-type'] = 'application/vnd.mapbox-vector-tile'
+        headers['vary'] = 'accept-encoding'
+        if allows_gzip:
+            headers['content-encoding'] = 'gzip'
+            return Response(status=200, response=tile_data, headers=headers)
+        return Response(status=200, response=ungzip(tile_data), headers=headers)
 
     def get_styles(identifier, version):
         try:
@@ -1853,8 +2092,12 @@ def simple_mbtiles_server(
             style_dict['sprite'] = request.url_root + 'v1/styles/' + \
                 identifier + '@' + version + '/sprite'
 
+        # The style embeds absolute URLs built from the current request, and
+        # gains contour layers when contours.mbtiles shows up, so it only gets
+        # a short lifetime.
         return Response(status=200, content_type='application/json',
-                        response=json.dumps(style_dict))
+                        response=json.dumps(style_dict),
+                        headers=_cache_headers(_CACHE_STYLE))
 
     def get_sprite_file(identifier, version, file, content_type):
         try:
@@ -1862,7 +2105,8 @@ def simple_mbtiles_server(
         except KeyError:
             return Response(status=404)
 
-        return Response(status=200, content_type=content_type, response=sprite_bytes)
+        return Response(status=200, content_type=content_type, response=sprite_bytes,
+                        headers=_cache_headers(_CACHE_IMMUTABLE))
 
     def get_sprite_1x_json(identifier, version):
         return get_sprite_file(identifier, version, 'sprite.json', 'application/json')
@@ -1940,14 +2184,13 @@ def simple_mbtiles_server(
             compress_obj = zlib.compressobj(wbits=31)
             return compress_obj.compress(serialized) + compress_obj.flush()
 
-        return \
-            Response(status=200, headers={
-                'content-encoding': 'gzip',
-                'content-type': 'application/vnd.google.protobuf',
-            }, response=gzip(serialized)) if allows_gzip else \
-            Response(status=200, headers={
-                'content-type': 'application/vnd.google.protobuf',
-            }, response=serialized)
+        headers = _cache_headers(_CACHE_IMMUTABLE)
+        headers['content-type'] = 'application/vnd.google.protobuf'
+        headers['vary'] = 'accept-encoding'
+        if allows_gzip:
+            headers['content-encoding'] = 'gzip'
+            return Response(status=200, headers=headers, response=gzip(serialized))
+        return Response(status=200, headers=headers, response=serialized)
 
     def get_static(identifier, version, file):
         try:
@@ -1955,8 +2198,11 @@ def simple_mbtiles_server(
         except KeyError:
             return Response(status=404)
 
+        # The library version is part of the URL, so this can never change
+        # under a client -- safe to mark immutable.
         return Response(status=200, content_type=static_dict['mime'],
-                        response=static_dict['bytes'])
+                        response=static_dict['bytes'],
+                        headers=_cache_headers(_CACHE_IMMUTABLE))
 
     # ------------------------------------------------------------------
     # Tile loading with cache
@@ -1978,6 +2224,7 @@ def simple_mbtiles_server(
         db_connection = mbtiles_dict[(identifier, version)]['db_connection']
         segments = []
         named_ways = []
+        route_ways = []
         hits = misses = 0
         for (z, x, y) in tiles:
             key = (identifier, version, z, x, y)
@@ -1985,18 +2232,19 @@ def simple_mbtiles_server(
             if cached is None:
                 misses += 1
                 blob = _load_tile_blob(db_connection, z, x, y)
-                cached = _extract_road_segments(blob, x, y, z) if blob else ([], [])
+                cached = _extract_road_segments(blob, x, y, z) if blob else ([], [], [])
                 road_cache.put(key, cached)
             else:
                 hits += 1
             segments.extend(cached[0])
             named_ways.extend(cached[1])
+            route_ways.extend(cached[2])
         for segment in segments:
             hints = segment[4] if len(segment) > 4 else ()
             for key, _value in hints:
                 if key in tile_data_features:
                     tile_data_features[key] = True
-        return segments, named_ways, hits, misses
+        return segments, named_ways, route_ways, hits, misses
 
     def _contour_lines_for_tiles(tiles):
         """Decoded contour lines for a list of (z, x, y) tiles."""
@@ -2027,7 +2275,8 @@ def simple_mbtiles_server(
 
     def compute_route(identifier, version, from_lat, from_lon, to_lat, to_lon,
                       profile='foot', buffer_km=None, with_elevation=False,
-                      max_sac_scale=None, allow_via_ferrata=True):
+                      max_sac_scale=None, allow_via_ferrata=True,
+                      prefer_routes=False, follow_route=None):
         """
         Route one segment from (from_lat, from_lon) to (to_lat, to_lon).
 
@@ -2067,14 +2316,27 @@ def simple_mbtiles_server(
                 'corridor too large (%d tiles, limit %d); reduce the buffer or '
                 'insert a waypoint' % (len(tiles), route_max_tiles), 400)
 
-        all_segments, named_ways, hits, misses = _road_segments_for_tiles(
+        all_segments, named_ways, route_ways, hits, misses = _road_segments_for_tiles(
             identifier, version, tiles)
 
         if not all_segments:
             raise RoutingError('no road network found in area', 404)
 
-        graph, edge_hints = _build_graph(
-            all_segments, profile, max_sac_scale, allow_via_ferrata)
+        route_index = None
+        if prefer_routes or follow_route:
+            route_index = _build_route_index(route_ways)
+            if follow_route and not any(
+                    _route_matches(entry, follow_route)
+                    for _lon, _lat, entry in route_ways):
+                raise RoutingError(
+                    'no marked route matching "%s" found in the corridor '
+                    'between the two points; check the spelling or use the '
+                    'ref (e.g. "E3"), or add waypoints closer to the route'
+                    % follow_route, 404)
+
+        graph, edge_hints, edge_routes = _build_graph(
+            all_segments, profile, max_sac_scale, allow_via_ferrata,
+            route_index, prefer_routes, follow_route)
         if not graph:
             limit_note = ''
             if max_sac_scale or not allow_via_ferrata:
@@ -2122,6 +2384,21 @@ def simple_mbtiles_server(
             'snap_start_m': round(start_snap_km * 1000, 1),
             'snap_end_m': round(end_snap_km * 1000, 1),
         }
+
+        used_routes = _routes_along_path(path_coords, edge_routes)
+        if used_routes:
+            properties['routes'] = used_routes
+        if prefer_routes:
+            properties['prefer_routes'] = True
+        if follow_route:
+            properties['follow_route'] = follow_route
+            if not any(_route_matches(
+                    (r.get('network', ''), r.get('ref', ''), r.get('name', '')),
+                    follow_route) for r in used_routes):
+                properties.setdefault('terrain_warnings', []).append(
+                    'the route was pulled towards "%s" but the result does not '
+                    'actually follow it -- the marked route may not connect '
+                    'these two points' % follow_route)
 
         terrain_warnings, terrain_stats = _terrain_warnings(path_coords, edge_hints)
         terrain_warnings.extend(_named_way_warnings(
@@ -2261,6 +2538,9 @@ def simple_mbtiles_server(
         max_sac_scale = request.args.get('max_sac_scale') or None
         allow_via_ferrata = request.args.get(
             'allow_via_ferrata', 'true').lower() not in ('0', 'false', 'no')
+        prefer_routes = request.args.get(
+            'prefer_routes', '').lower() in ('1', 'true', 'yes')
+        follow_route = request.args.get('follow_route') or None
 
         try:
             buffer_km = request.args.get('buffer_km')
@@ -2271,7 +2551,8 @@ def simple_mbtiles_server(
         try:
             feature = compute_route(identifier, version, from_lat, from_lon,
                                     to_lat, to_lon, profile, buffer_km, with_elevation,
-                                    max_sac_scale, allow_via_ferrata)
+                                    max_sac_scale, allow_via_ferrata,
+                                    prefer_routes, follow_route)
         except RoutingError as exc:
             return _json({'error': exc.message}, exc.status)
 
@@ -2327,13 +2608,23 @@ def simple_mbtiles_server(
         xml = gpx_store.read(gpx_id)
         if xml is None:
             return _json({'error': 'unknown or expired gpx id'}, 404)
+        # A gpx id always maps to the same file, so a client may keep it --
+        # but it is user generated, so no shared cache.
         return Response(status=200, response=xml, headers={
             'content-type': 'application/gpx+xml',
             'content-disposition': 'attachment; filename="%s.gpx"' % gpx_id,
+            'cache-control': 'private, max-age=86400',
         })
 
     def get_index():
-        return send_from_directory(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'vendor'), 'index.html')
+        # The HTML shell must stay revalidated: startup.sh rewrites it when
+        # PHOTONSERVER changes, and a stale UI against a new API is confusing.
+        # send_from_directory already sets an ETag, so revalidation is cheap.
+        resp = send_from_directory(
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), 'vendor'),
+            'index.html')
+        resp.headers['cache-control'] = 'no-cache'
+        return resp
 
     def get_capabilities():
         return Response(status=200, content_type='application/json', response=json.dumps({
@@ -2546,6 +2837,10 @@ def simple_mbtiles_server(
             raise ToolError('unknown max_sac_scale "%s"; use one of: %s'
                             % (max_sac_scale, ', '.join(_SAC_SCALE_ORDER)))
         allow_via_ferrata = bool(args.get('allow_via_ferrata', True))
+        prefer_routes = bool(args.get('prefer_routes', False))
+        follow_route = args.get('follow_route') or None
+        if follow_route is not None and not isinstance(follow_route, str):
+            raise ToolError('follow_route must be a string like "Malerweg" or "E3"')
         identifier, version = _tiles_from_args(args)
         want_elevation = bool(args.get('elevation', True)) and bool(contours_dict)
         want_gpx = bool(args.get('export_gpx', True))
@@ -2555,6 +2850,7 @@ def simple_mbtiles_server(
         segments = []
         errors = []
         terrain_notes = []
+        routes_used = {}
         sac_seen = set()
         total_km = 0.0
         cache_hits = cache_misses = 0
@@ -2566,7 +2862,8 @@ def simple_mbtiles_server(
             try:
                 feature = compute_route(identifier, version, from_lat, from_lon,
                                         to_lat, to_lon, profile, buffer_km, False,
-                                        max_sac_scale, allow_via_ferrata)
+                                        max_sac_scale, allow_via_ferrata,
+                                        prefer_routes, follow_route)
             except RoutingError as exc:
                 errors.append('segment %d (%.5f,%.5f -> %.5f,%.5f): %s'
                               % (i + 1, from_lat, from_lon, to_lat, to_lon, exc.message))
@@ -2584,6 +2881,10 @@ def simple_mbtiles_server(
             for warning in props.get('terrain_warnings', ()):
                 if warning not in terrain_notes:
                     terrain_notes.append(warning)
+            for route in props.get('routes', ()):
+                label = route.get('name') or route.get('ref')
+                if label and label not in routes_used:
+                    routes_used[label] = route
             if props.get('max_sac_scale'):
                 sac_seen.add(props['max_sac_scale'])
             seg_coords = feature['geometry']['coordinates']
@@ -2631,6 +2932,14 @@ def simple_mbtiles_server(
         }
         if terrain_notes:
             result['terrain_warnings'] = terrain_notes
+        if routes_used:
+            result['routes'] = sorted(
+                routes_used.values(),
+                key=lambda r: r.get('segments', 0), reverse=True)[:12]
+        if follow_route:
+            result['follow_route'] = follow_route
+        if prefer_routes:
+            result['prefer_routes'] = True
         if sac_seen:
             result['max_sac_scale'] = max(
                 sac_seen, key=lambda label: int(label.lstrip('T')))
@@ -2906,6 +3215,36 @@ def simple_mbtiles_server(
                                    'max_sac_scale.',
                 },
                 'export_gpx': {'type': 'boolean', 'default': True},
+                'prefer_routes': {
+                    'type': 'boolean',
+                    'default': False,
+                    'description': 'prefer ways that carry a marked hiking '
+                                   'route (for bike: a cycle route). Marked '
+                                   'routes are signposted, maintained and '
+                                   'usually the scenic line, so this is the '
+                                   'sensible default for a tour the user will '
+                                   'actually walk. International routes rank '
+                                   'above national, regional and local ones. '
+                                   'It is a weighting, not a filter: unmarked '
+                                   'ways stay available, so no route ever '
+                                   'fails because of it.',
+                },
+                'follow_route': {
+                    'type': 'string',
+                    'description': 'follow one specific marked route, e.g. '
+                                   '"Malerweg", "Via Alpina" or the ref "E3". '
+                                   'Matches the route ref exactly or the name '
+                                   'as a substring. Use this when the user '
+                                   'names a trail and the straight-line route '
+                                   'would cut its loops -- the Forststeig, for '
+                                   'example, makes detours to rock groups that '
+                                   'plain waypoint routing skips. Still a '
+                                   'strong preference, not a hard constraint: '
+                                   'if the marked route does not connect the '
+                                   'waypoints, the result says so in '
+                                   'terrain_warnings. Fails with a clear error '
+                                   'if no such route exists in the corridor.',
+                },
                 'tileset': {'type': 'string',
                             'description': 'optional tileset as identifier@version'},
             },
@@ -2975,6 +3314,10 @@ def simple_mbtiles_server(
     def _add_headers(resp):
         if http_access_control_allow_origin:
             resp.headers['access-control-allow-origin'] = http_access_control_allow_origin
+        # Anything that did not opt into caching explicitly is dynamic:
+        # routes, POI searches, capabilities, MCP responses. Serving a stale
+        # route to an agent is worse than recomputing it.
+        resp.headers.setdefault('cache-control', _CACHE_NONE)
         return resp
 
     app.add_url_rule('/', view_func=get_index)

@@ -359,7 +359,7 @@ def test_astar_matches_dijkstra():
                 segments.append((a, b, _haversine(a[0] / 1e5, a[1] / 1e5,
                                                   b[0] / 1e5, b[1] / 1e5), 'path'))
 
-    graph, _hints = _build_graph(segments, 'foot')
+    graph, _hints, _routes = _build_graph(segments, 'foot')
     start = (int(round(11.0 * 100000)), int(round(48.0 * 100000)))
     end = (int(round((11.0 + 19 * 0.005) * 100000)),
            int(round((48.0 + 19 * 0.005) * 100000)))
@@ -406,7 +406,7 @@ def test_snapping_avoids_disconnected_fragments():
     stub_b = (1150020, 4810010)
     segments.append((stub_a, stub_b, 0.01, 'path'))
 
-    graph, _hints = _build_graph(segments, 'foot')
+    graph, _hints, _routes = _build_graph(segments, 'foot')
     start_lon, start_lat = 1150012 / 1e5, 4810009 / 1e5
     end_lon, end_lat = 1151000 / 1e5, 4810000 / 1e5
 
@@ -429,7 +429,7 @@ def test_snap_pair_reports_distance_when_nothing_in_range():
     from simple_mbtiles_server.__main__ import _build_graph, _snap_pair
 
     segments = [((1150000, 4810000), (1150100, 4810000), 0.1, 'path')]
-    graph, _hints = _build_graph(segments, 'foot')
+    graph, _hints, _routes = _build_graph(segments, 'foot')
     # both far away from the single segment at 11.5, 48.1
     _start, start_km, _end, end_km = _snap_pair(graph, 0.0, 0.0, 20.0, 10.0)
     assert start_km > 0.5
@@ -500,6 +500,100 @@ def test_gpx_store_rejects_path_traversal():
 # ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
+
+def test_tiles_are_cacheable_with_etag(server):
+    """
+    Tiles are the hot path: a client fetches dozens per pan. Without a long
+    max-age every one of them is a fresh request, and the deployed server had
+    no cache headers at all.
+    """
+    resp = httpx.get(BASE + '/v1/tiles/mytiles@1.0.0/14/8718/5684.mvt', timeout=30.0)
+    assert resp.status_code == 200
+    cache = resp.headers['cache-control']
+    assert 'public' in cache
+    assert 'max-age=604800' in cache            # a week
+    assert resp.headers['etag']
+    # gzip negotiation means the response varies per encoding
+    assert resp.headers['vary'] == 'accept-encoding'
+
+
+def test_tile_revalidation_returns_304(server):
+    """A cheap revalidation must not resend the payload."""
+    url = BASE + '/v1/tiles/mytiles@1.0.0/14/8718/5684.mvt'
+    etag = httpx.get(url, timeout=30.0).headers['etag']
+
+    resp = httpx.get(url, headers={'if-none-match': etag}, timeout=30.0)
+    assert resp.status_code == 304
+    assert resp.content == b''
+
+    # a stale etag (e.g. after a tile rebuild) must serve the tile again
+    resp = httpx.get(url, headers={'if-none-match': '"stale-0-0-0"'}, timeout=30.0)
+    assert resp.status_code == 200
+
+
+def test_etag_encodes_dataset_version(server):
+    """
+    The etag has to change when the .mbtiles file is rebuilt, otherwise
+    clients keep week-old tiles after a deploy. It is derived from mtime and
+    size, so no manual cache busting is needed.
+    """
+    resp = httpx.get(BASE + '/v1/tiles/mytiles@1.0.0/14/8718/5684.mvt', timeout=30.0)
+    etag = resp.headers['etag'].strip('"')
+    # <dataset>-<z>-<x>-<y>
+    assert etag.endswith('-14-8718-5684')
+    dataset = etag[:-len('-14-8718-5684')]
+    assert dataset and dataset != 'unknown'
+    # neighbouring tiles share the dataset part but differ overall
+    other = httpx.get(BASE + '/v1/tiles/mytiles@1.0.0/14/8718/5685.mvt',
+                      timeout=30.0).headers['etag'].strip('"')
+    assert other.startswith(dataset)
+    assert other != etag
+
+
+def test_immutable_assets_are_cached_forever(server):
+    """
+    Fonts, sprites and the vendored library carry their version in the URL,
+    so they can never change under a client.
+    """
+    for path in ('/v1/static/maplibre-gl@5.19.0/maplibre-gl.js',
+                 '/v1/fonts/fonts-gl@1.0.0/Noto%20Sans%20Regular/0-255.pbf'):
+        cache = httpx.get(BASE + path, timeout=30.0).headers['cache-control']
+        assert 'immutable' in cache, path
+        assert 'max-age=31536000' in cache, path
+
+
+def test_dynamic_endpoints_are_not_cached(server):
+    """
+    Routes, POI searches and capabilities must never be served stale -- an
+    agent acting on a cached route would plan against outdated data.
+    """
+    paths = [
+        '/v1/capabilities',
+        '/v1/route/mytiles@1.0.0?from=48.12,11.52&to=48.16,11.58',
+        '/v1/poi/mytiles@1.0.0?lat=48.15&lon=11.57&category=alpine_hut',
+    ]
+    for path in paths:
+        resp = httpx.get(BASE + path, timeout=60.0)
+        assert resp.headers['cache-control'] == 'no-store', path
+
+    # the style embeds request-derived URLs, so only a short lifetime
+    style = httpx.get(BASE + '/v1/styles/osuv-style@1.0.0/style.json'
+                             '?tiles=mytiles@1.0.0&fonts=fonts-gl@1.0.0', timeout=30.0)
+    assert 'max-age=3600' in style.headers['cache-control']
+
+    # the HTML shell is rewritten by startup.sh, so it must revalidate
+    assert 'no-cache' in httpx.get(BASE + '/', timeout=30.0).headers['cache-control']
+
+
+def test_missing_tiles_are_cached_briefly(server):
+    """
+    Ocean and out-of-extract tiles 404 constantly while panning; letting the
+    client remember that for an hour saves a lot of pointless requests.
+    """
+    resp = httpx.get(BASE + '/v1/tiles/mytiles@1.0.0/14/1/1.mvt', timeout=30.0)
+    assert resp.status_code == 404
+    assert 'max-age=3600' in resp.headers['cache-control']
+
 
 def test_capabilities(server):
     body = httpx.get(BASE + '/v1/capabilities', timeout=10.0).json()
@@ -711,6 +805,111 @@ def test_poi_categories_separate_huts_from_shelters():
     assert not _matches_poi_category({'subclass': 'camp_site'}, 'alpine_hut')
 
 
+def test_route_entries_and_matching():
+    """
+    OpenMapTiles flattens route relations into route_1_* .. route_4_*.
+    Matching has to work on the ref ("E3") and on the name as a substring,
+    because OSM names carry suffixes ("Malerweg (Etappe 3)").
+    """
+    from simple_mbtiles_server.__main__ import _route_entries, _route_matches
+
+    props = {
+        'route_1_network': 'iwn', 'route_1_ref': 'E3',
+        'route_1_name': 'Europäischer Fernwanderweg E3, Sachsen',
+        'route_2_network': 'rwn', 'route_2_name': 'Malerweg',
+        'route_4_network': 'lwn', 'route_4_name': 'Gelber Balken',
+    }
+    entries = _route_entries(props)
+    assert len(entries) == 3                      # gaps (route_3) are skipped
+    assert ('iwn', 'E3', 'Europäischer Fernwanderweg E3, Sachsen') in entries
+
+    assert _route_matches(entries[0], 'E3')       # exact ref
+    assert _route_matches(entries[0], 'e3')       # case insensitive
+    assert _route_matches(entries[1], 'Malerweg')
+    assert _route_matches(entries[1], 'malerweg')
+    assert not _route_matches(entries[1], 'Forststeig')
+    assert not _route_matches(entries[1], '')     # empty query matches nothing
+    # a ref must not match by substring, or "E3" would hit "E33"
+    assert not _route_matches(('iwn', 'E33', ''), 'E3')
+
+
+def test_prefer_routes_discounts_marked_ways():
+    """
+    A marked hiking route is signposted and maintained, so it should win over
+    an unmarked shortcut of similar length -- but only as a weighting.
+    International routes rank above local ones.
+    """
+    from simple_mbtiles_server.__main__ import _route_factor
+
+    iwn = ('iwn', 'E3', 'Fernwanderweg E3')
+    lwn = ('lwn', '', 'Gelber Balken')
+    road = ('DE:national', 'B 23', 'Bundesstraße 23')
+
+    assert _route_factor([iwn], 'foot') < _route_factor([lwn], 'foot') < 1.0
+    # road route relations are not a hiking preference
+    assert _route_factor([road], 'foot') == 1.0
+    # no routes at all -> neutral
+    assert _route_factor([], 'foot') == 1.0
+    # cycle networks only count for bike, hiking networks only for foot
+    assert _route_factor([('ncn', '', 'D-Route 9')], 'bike') < 1.0
+    assert _route_factor([('ncn', '', 'D-Route 9')], 'foot') == 1.0
+
+
+def test_follow_route_pulls_hard_but_stays_a_preference():
+    """
+    follow_route exists for the Forststeig case: waypoint routing cuts the
+    loops a marked trail makes. The discount is strong, but unmatched ways
+    stay usable so the graph never becomes unroutable.
+    """
+    from simple_mbtiles_server.__main__ import _route_factor
+
+    forststeig = ('rwn', '', 'Forststeig Elbsandstein')
+    other = ('lwn', '', 'Gelber Balken')
+
+    strong = _route_factor([forststeig], 'foot', 'Forststeig')
+    assert strong < _route_factor([forststeig], 'foot')      # stronger than prefer
+    # a non-matching route is neutral, not penalised
+    assert _route_factor([other], 'foot', 'Forststeig') == 1.0
+
+
+def test_route_index_matches_by_proximity():
+    """
+    transportation_name carries its own generalised geometry, so routes can
+    only be bound to graph edges by proximity.
+    """
+    from simple_mbtiles_server.__main__ import (
+        _build_route_index, _routes_at, _E5)
+
+    entry = ('rwn', '', 'Malerweg')
+    ways = [(int(round(14.2 * _E5)), int(round(50.9 * _E5)), entry)]
+    index = _build_route_index(ways)
+
+    assert entry in _routes_at(index, 14.2, 50.9)
+    assert entry in _routes_at(index, 14.2005, 50.9005)   # ~50 m away
+    assert _routes_at(index, 15.0, 51.5) == set()          # far away
+
+
+def test_routes_along_path_reports_share():
+    from simple_mbtiles_server.__main__ import _routes_along_path, _E5
+
+    def node(lon, lat):
+        return (int(round(lon * _E5)), int(round(lat * _E5)))
+
+    path = [[14.20, 50.90], [14.21, 50.90], [14.22, 50.90]]
+    malerweg = ('rwn', '', 'Malerweg')
+    road = ('cz:national', '62', 'Silnice I/62')
+    edge_routes = {
+        (node(14.20, 50.90), node(14.21, 50.90)): {malerweg, road},
+        (node(14.21, 50.90), node(14.22, 50.90)): {malerweg, road},
+    }
+    out = _routes_along_path(path, edge_routes)
+    assert len(out) == 1                      # the road relation is filtered
+    assert out[0]['name'] == 'Malerweg'
+    assert out[0]['segments'] == 2
+    assert out[0]['share_percent'] == 100
+    assert out[0]['network_label'] == 'regional'
+
+
 def test_surface_penalty_prefers_rideable_tracks_for_bike():
     """
     For bikepacking the surface matters more than the road class: a "track"
@@ -759,10 +958,10 @@ def test_sac_scale_filter_excludes_hard_ways():
     def edges(graph):
         return sum(len(v) for v in graph.values()) // 2
 
-    graph, _ = _build_graph([easy, hard, untagged], 'foot')
+    graph, _, _ = _build_graph([easy, hard, untagged], 'foot')
     assert edges(graph) == 3                    # no limit -> everything routable
 
-    graph, _ = _build_graph([easy, hard, untagged], 'foot',
+    graph, _, _ = _build_graph([easy, hard, untagged], 'foot',
                             max_sac_scale='mountain_hiking')
     # the T5 edge is gone ...
     assert edges(graph) == 2
@@ -785,10 +984,10 @@ def test_via_ferrata_can_be_excluded():
     def edges(graph):
         return sum(len(v) for v in graph.values()) // 2
 
-    graph, _ = _build_graph([ferrata, ladder, normal], 'foot')
+    graph, _, _ = _build_graph([ferrata, ladder, normal], 'foot')
     assert edges(graph) == 3
 
-    graph, _ = _build_graph([ferrata, ladder, normal], 'foot',
+    graph, _, _ = _build_graph([ferrata, ladder, normal], 'foot',
                             allow_via_ferrata=False)
     assert edges(graph) == 1                    # only the normal segment left
 
@@ -802,7 +1001,7 @@ def test_untagged_ways_are_never_excluded():
     from simple_mbtiles_server.__main__ import _build_graph
 
     untagged = ((1150000, 4810000), (1150100, 4810000), 0.1, 'path', ())
-    graph, _ = _build_graph([untagged], 'foot', max_sac_scale='hiking',
+    graph, _, _ = _build_graph([untagged], 'foot', max_sac_scale='hiking',
                             allow_via_ferrata=False)
     assert sum(len(v) for v in graph.values()) // 2 == 1
 
@@ -930,6 +1129,37 @@ def test_photon_url_prefers_internal_override():
     with open(template_path, encoding='utf-8') as f:
         template = f.read()
     assert set(re.findall(r'PHOTONSERVER\w*', template)) == {'PHOTONSERVER'}
+
+
+def test_frontend_offers_marked_route_preference():
+    """Both UI variants must expose prefer_routes and send it."""
+    root = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simple_mbtiles_server', 'vendor')
+
+    for name in ('index.html', 'index_with_photon.html'):
+        with open(os.path.join(root, name), encoding='utf-8') as f:
+            html = f.read()
+        assert 'id="route-prefer-routes"' in html, name
+        # on by default: a hiking UI should follow signposted trails
+        assert 'id="route-prefer-routes" checked' in html, name
+        assert 'prefer_routes=true' in html, name
+        # marked routes are reported back to the user
+        assert 'props.routes' in html, name
+        # and the control is hidden again when the route is cleared
+        assert 'route-marked-label' in html, name
+
+
+def test_plan_route_tool_documents_route_options():
+    """
+    The follow_route description has to name the actual use case, otherwise
+    an agent will not know when to reach for it.
+    """
+    from simple_mbtiles_server.__main__ import _ROUTE_PREFERENCE
+
+    # sanity: hiking networks are cheaper than 1.0, ordered by importance
+    assert _ROUTE_PREFERENCE['iwn'] < _ROUTE_PREFERENCE['lwn'] < 1.0
+    assert _ROUTE_PREFERENCE['icn'] < _ROUTE_PREFERENCE['lcn'] < 1.0
 
 
 def test_coordinate_settings_present_in_both_uis():
