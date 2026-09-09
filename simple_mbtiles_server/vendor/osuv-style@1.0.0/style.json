@@ -352,9 +352,58 @@
       ],
       "layout": {"line-cap": "round", "line-join": "round"},
       "paint": {
-        "line-color": "#d04020",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.8, 15, 2.5],
+        "line-color": ["match", ["get", "sac_scale"],
+          "hiking",                    "#e8a010",
+          "mountain_hiking",           "#1060b0",
+          "demanding_mountain_hiking", "#0a3d78",
+          "alpine_hiking",             "#5b21b6",
+          "demanding_alpine_hiking",   "#3b0764",
+          "difficult_alpine_hiking",   "#18181b",
+          "#d04020"
+        ],
+        "line-width": ["interpolate", ["linear"], ["zoom"],
+          11, 0.8,
+          15, ["match", ["get", "sac_scale"],
+            "alpine_hiking",           3.0,
+            "demanding_alpine_hiking", 3.0,
+            "difficult_alpine_hiking", 3.0,
+            2.5]
+        ],
         "line-dasharray": [2, 2]
+      }
+    },
+    {
+      "id": "path-via-ferrata-halo",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "minzoom": 13,
+      "filter": ["all",
+        ["==", "class", "path"],
+        ["any", ["has", "via_ferrata_scale"], ["==", "ladder", "yes"]]
+      ],
+      "layout": {"line-cap": "butt", "line-join": "round"},
+      "paint": {
+        "line-color": "#ffffff",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 13, 4.0, 16, 7.5],
+        "line-opacity": 0.7
+      }
+    },
+    {
+      "id": "path-via-ferrata",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "minzoom": 13,
+      "filter": ["all",
+        ["==", "class", "path"],
+        ["any", ["has", "via_ferrata_scale"], ["==", "ladder", "yes"]]
+      ],
+      "layout": {"line-cap": "butt", "line-join": "round"},
+      "paint": {
+        "line-color": "#dc2626",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2.0, 16, 4.5],
+        "line-dasharray": [0.8, 1.2]
       }
     },
     {

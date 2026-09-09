@@ -155,6 +155,10 @@ Returns JSON capabilities indicating available optional features.
   "gpx":       true,
   "geocoding": false,
   "mcp_tools": ["search_poi", "plan_route", "export_gpx"],
+  "difficulty_data": {
+    "sac_scale": true, "via_ferrata_scale": true,
+    "trail_visibility": true, "smoothness": true
+  },
   "routing_limits": { "max_tiles": 1200, "max_crow_km": 50.0, "zoom": 14 },
   "tile_cache": {
     "roads":    { "entries": 812, "max_entries": 2000, "hits": 4210, "misses": 812 },
@@ -171,6 +175,11 @@ Returns JSON capabilities indicating available optional features.
 - `geocoding` — whether `PHOTONSERVER` is configured (enables the `geocode`
   and `reverse_geocode` MCP tools)
 - `mcp_tools` — names of the registered MCP tools
+- `difficulty_data` — which hiking attributes the loaded tiles actually carry.
+  All `false` on stock OpenMapTiles tiles (see *Hiking attributes* below), and
+  in that case a missing warning means missing data, not easy terrain. The
+  flags flip to `true` as soon as a tile containing them has been decoded.
+- `sac_scale_values` — accepted values for `max_sac_scale`, easiest first
 - `tile_cache` — live hit/miss counters of the decoded-tile caches
 
 
@@ -186,7 +195,14 @@ Search for Points of Interest (POI) within a radius and return GeoJSON features.
 - `lat` — Latitude coordinate (required)
 - `lon` — Longitude coordinate (required)
 - `category` — POI category (required): `supermarket`, `pharmacy`, `hospital`,
-  `fuel`, `charging_station`, `alpine_hut`, `camp_site`, or `shelter`
+  `fuel`, `charging_station`, `alpine_hut`, `camp_site`, `shelter`,
+  `drinking_water`, `cave`, `viewpoint`, or `emergency`
+
+  `drinking_water`, `cave`, `viewpoint` and `emergency` need tiles built with
+  the extended profile linked above — stock OpenMapTiles does not put springs,
+  wells or cave entrances into the `poi` layer at all. Note that
+  `drinking_water` includes springs and cattle troughs: that is a location, not
+  a potability guarantee.
 
   Note that `alpine_hut` covers only real mountain huts
   (`alpine_hut`, `wilderness_hut`, `basic_hut`). OpenMapTiles files bus stop
@@ -326,6 +342,18 @@ No external routing engine required — routing is performed entirely server-sid
   detour around a lake or a closed area is needed.
 - `elevation` — `true` to add `ascent_m`/`descent_m` from `contours.mbtiles`
   and switch the duration estimate to DIN 33466 (optional)
+- `max_sac_scale` — hardest SAC grade allowed: `hiking` (T1),
+  `mountain_hiking` (T2), `demanding_mountain_hiking` (T3), `alpine_hiking`
+  (T4), `demanding_alpine_hiking` (T5), `difficult_alpine_hiking` (T6).
+  Ways tagged *above* the limit are excluded from routing. Requires tiles with
+  hiking attributes (optional)
+- `allow_via_ferrata` — `false` excludes ways tagged as via ferrata or with
+  fixed ladders (optional, default `true`)
+
+  Note these are **independent axes**: a way can be T6 scrambling without any
+  ferrata tag, and a cabled route can be tagged T2. On a real Zugspitze test,
+  excluding ferratas alone still produced a T6 route — for a safe tour set
+  both. The response says so via `terrain_warnings` when only one is used.
 
 **Example:**
 ```
@@ -373,6 +401,46 @@ GET /v1/route/mytiles@1.0.0?from=48.137,11.575&to=48.155,11.602&profile=foot
 `elevation=true` and `contours.mbtiles` present, `foot` switches to a
 DIN 33466 / SAC estimate instead (300 m ascent or 500 m descent per hour,
 combined as `max(horizontal, vertical) + min(horizontal, vertical) / 2`).
+
+### Hiking attributes: sac_scale, via ferratas, surface
+
+OpenMapTiles is a **rendering** schema. Its transportation layer whitelists the
+attributes it keeps, and `sac_scale`, `trail_visibility` and
+`via_ferrata_scale` are not on that list — they exist in the OSM source data
+but are dropped during tile generation. The practical consequence is severe: a
+router cannot tell a T1 stroll from a T5 scramble, and **via ferratas appear as
+ordinary paths**. A route from the Zugspitze to the Alpspitze happily runs over
+"Stopselzieher" and "Höllentalsteig", both cabled climbing routes with ladders
+and a glacier crossing.
+
+sms therefore evaluates these attributes when they are present:
+
+| Attribute | Used for |
+|---|---|
+| `sac_scale` | `max_sac_scale` filter, `terrain_warnings`, extra time for T3+ on foot |
+| `via_ferrata_scale`, `ladder` | `allow_via_ferrata=false` filter, warnings |
+| `trail_visibility` | warning at `bad`/`horrible`/`no` |
+| `smoothness`, `tracktype` | weighting for `bike` — decides riding vs. pushing |
+| `mtb_scale` | warning at 4+ |
+| `surface` | statistics, minor weighting |
+| `osm_id` | warnings link to the way on openstreetmap.org, and group repeated sections |
+
+Where a way carries a real grade, the name-based fallback heuristic ("...steig",
+"Ferrata", "Grat") is suppressed — the "Höllentalsteig" near Garmisch is tagged
+T2, so warning about its name would contradict the data. The heuristic stays
+active on untagged ways.
+
+To get them, the tiles must be built with a planetiler whose OpenMapTiles
+profile emits those fields — see
+[markuman/planetiler](https://github.com/markuman/planetiler), which adds them
+at z14. `/v1/capabilities` reports under `difficulty_data` whether the loaded
+tiles carry them.
+
+**Without such tiles everything still works**, just without difficulty data:
+untagged ways are never excluded and never penalised, so routing behaves
+exactly as before. That is deliberate — most of the world has no `sac_scale`,
+and excluding untagged ways would produce empty results while pretending to be
+safe. An untagged path can be anything.
 
 ### Tile selection: corridor instead of bounding box
 
@@ -459,6 +527,14 @@ Generated files are cleaned up automatically: anything older than
 **Error responses:**
 - `404` — unknown or expired id
 
+
+### Map UI routing options
+
+The map UI exposes the same knobs: a transport dropdown (hiking / bike), a
+difficulty dropdown (T1–T6, default "egal"/any) and an "ohne Klettersteig"
+checkbox which is **on by default** — a hiking UI should not silently route
+over a via ferrata. Changing any of them recalculates all segments, and
+`terrain_warnings` are shown below the toolbar with the OSM way linked.
 
 ## MCP API (route planning for LLM agents)
 

@@ -359,7 +359,7 @@ def test_astar_matches_dijkstra():
                 segments.append((a, b, _haversine(a[0] / 1e5, a[1] / 1e5,
                                                   b[0] / 1e5, b[1] / 1e5), 'path'))
 
-    graph = _build_graph(segments, 'foot')
+    graph, _hints = _build_graph(segments, 'foot')
     start = (int(round(11.0 * 100000)), int(round(48.0 * 100000)))
     end = (int(round((11.0 + 19 * 0.005) * 100000)),
            int(round((48.0 + 19 * 0.005) * 100000)))
@@ -406,7 +406,7 @@ def test_snapping_avoids_disconnected_fragments():
     stub_b = (1150020, 4810010)
     segments.append((stub_a, stub_b, 0.01, 'path'))
 
-    graph = _build_graph(segments, 'foot')
+    graph, _hints = _build_graph(segments, 'foot')
     start_lon, start_lat = 1150012 / 1e5, 4810009 / 1e5
     end_lon, end_lat = 1151000 / 1e5, 4810000 / 1e5
 
@@ -429,7 +429,7 @@ def test_snap_pair_reports_distance_when_nothing_in_range():
     from simple_mbtiles_server.__main__ import _build_graph, _snap_pair
 
     segments = [((1150000, 4810000), (1150100, 4810000), 0.1, 'path')]
-    graph = _build_graph(segments, 'foot')
+    graph, _hints = _build_graph(segments, 'foot')
     # both far away from the single segment at 11.5, 48.1
     _start, start_km, _end, end_km = _snap_pair(graph, 0.0, 0.0, 20.0, 10.0)
     assert start_km > 0.5
@@ -444,8 +444,8 @@ def test_tiles_decoded_once_serve_both_profiles():
     from simple_mbtiles_server.__main__ import _build_graph
 
     segments = [((1150000, 4810000), (1150100, 4810000), 0.1, 'footway')]
-    assert _build_graph(segments, 'foot')
-    assert _build_graph(segments, 'bike') == {}   # footway is closed for bikes
+    assert _build_graph(segments, 'foot')[0]
+    assert _build_graph(segments, 'bike')[0] == {}   # footway is closed for bikes
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +711,184 @@ def test_poi_categories_separate_huts_from_shelters():
     assert not _matches_poi_category({'subclass': 'camp_site'}, 'alpine_hut')
 
 
+def test_surface_penalty_prefers_rideable_tracks_for_bike():
+    """
+    For bikepacking the surface matters more than the road class: a "track"
+    is either smooth gravel or a rutted mess, and with luggage that decides
+    between riding and pushing.
+    """
+    from simple_mbtiles_server.__main__ import _hint_penalty
+
+    assert _hint_penalty((('smoothness', 'excellent'),), 'bike') == 1.0
+    assert _hint_penalty((('smoothness', 'very_horrible'),), 'bike') > 3
+    assert _hint_penalty((('smoothness', 'impassable'),), 'bike') is None
+    # grade5 track costs more than grade1
+    assert (_hint_penalty((('tracktype', 'grade5'),), 'bike') >
+            _hint_penalty((('tracktype', 'grade1'),), 'bike'))
+    # on foot the surface hardly matters
+    assert _hint_penalty((('smoothness', 'bad'),), 'foot') == 1.0
+    # T4 costs extra time on foot even when allowed
+    assert _hint_penalty((('sac_scale', 'alpine_hiking'),), 'foot') > 1.5
+
+
+def test_untagged_segments_are_unaffected_by_penalties():
+    """
+    Stock OpenMapTiles has no smoothness/sac_scale. Untagged ways must keep
+    weight 1.0, otherwise the fork would silently change routing everywhere.
+    """
+    from simple_mbtiles_server.__main__ import _hint_penalty
+
+    for profile in ('foot', 'bike'):
+        assert _hint_penalty((), profile) == 1.0
+        assert _hint_penalty((('brunnel', 'bridge'),), profile) == 1.0
+
+
+def test_sac_scale_filter_excludes_hard_ways():
+    """
+    The whole point of the planetiler fork: with real sac_scale data the
+    router can *refuse* to use a T4 path instead of merely warning about it.
+    """
+    from simple_mbtiles_server.__main__ import _build_graph
+
+    easy = ((1150000, 4810000), (1150100, 4810000), 0.1, 'path',
+            (('sac_scale', 'mountain_hiking'),))
+    hard = ((1150100, 4810000), (1150200, 4810000), 0.1, 'path',
+            (('sac_scale', 'demanding_alpine_hiking'),))
+    untagged = ((1150200, 4810000), (1150300, 4810000), 0.1, 'path', ())
+
+    def edges(graph):
+        return sum(len(v) for v in graph.values()) // 2
+
+    graph, _ = _build_graph([easy, hard, untagged], 'foot')
+    assert edges(graph) == 3                    # no limit -> everything routable
+
+    graph, _ = _build_graph([easy, hard, untagged], 'foot',
+                            max_sac_scale='mountain_hiking')
+    # the T5 edge is gone ...
+    assert edges(graph) == 2
+    assert (1150200, 4810000) not in [
+        n for n, _w, _r in graph[(1150100, 4810000)]]
+    # ... but the untagged segment is deliberately kept
+    assert (1150300, 4810000) in [
+        n for n, _w, _r in graph[(1150200, 4810000)]]
+
+
+def test_via_ferrata_can_be_excluded():
+    from simple_mbtiles_server.__main__ import _build_graph
+
+    ferrata = ((1150000, 4810000), (1150100, 4810000), 0.1, 'path',
+               (('via_ferrata_scale', '3'),))
+    ladder = ((1150100, 4810000), (1150200, 4810000), 0.1, 'path',
+              (('ladder', 'yes'),))
+    normal = ((1150200, 4810000), (1150300, 4810000), 0.1, 'path', ())
+
+    def edges(graph):
+        return sum(len(v) for v in graph.values()) // 2
+
+    graph, _ = _build_graph([ferrata, ladder, normal], 'foot')
+    assert edges(graph) == 3
+
+    graph, _ = _build_graph([ferrata, ladder, normal], 'foot',
+                            allow_via_ferrata=False)
+    assert edges(graph) == 1                    # only the normal segment left
+
+
+def test_untagged_ways_are_never_excluded():
+    """
+    Most of the world has no sac_scale. Excluding untagged ways by default
+    would produce "no route found" almost everywhere -- and would be false
+    safety, since an untagged way can be anything.
+    """
+    from simple_mbtiles_server.__main__ import _build_graph
+
+    untagged = ((1150000, 4810000), (1150100, 4810000), 0.1, 'path', ())
+    graph, _ = _build_graph([untagged], 'foot', max_sac_scale='hiking',
+                            allow_via_ferrata=False)
+    assert sum(len(v) for v in graph.values()) // 2 == 1
+
+
+def test_terrain_warnings_report_real_grades():
+    from simple_mbtiles_server.__main__ import _terrain_warnings, _E5
+
+    a = (int(round(11.0 * _E5)), int(round(47.5 * _E5)))
+    b = (int(round(11.001 * _E5)), int(round(47.5 * _E5)))
+    hints = {(a, b): ('path', (('sac_scale', 'alpine_hiking'),
+                               ('trail_visibility', 'horrible')))}
+    warnings, stats = _terrain_warnings([[11.0, 47.5], [11.001, 47.5]], hints)
+
+    assert stats['max_sac_scale'] == 'T4'
+    assert any('T4' in w for w in warnings)
+    assert any('trail_visibility=horrible' in w for w in warnings)
+
+
+def test_alpine_name_heuristic_flags_via_ferratas():
+    """
+    Via ferratas ARE in the data -- as plain class=path, indistinguishable
+    from a forest track. A Zugspitze->Alpspitze route runs straight over
+    "Stopselzieher" and "Hoellentalsteig", both cabled climbing routes, and
+    since OpenMapTiles has no sac_scale the only signal left is the name.
+    """
+    from simple_mbtiles_server.__main__ import _alpine_name_warning
+
+    for name in ('Stopselzieher', 'Höllentalsteig', 'Zustieg Alpspitz-Ferrata',
+                 'Jubiläumsgrat', 'Alpspitz-Klettersteig', 'Sentiero attrezzato Rio'):
+        assert _alpine_name_warning(name), name
+
+    for name in ('Forstweg', 'Seeuferweg', 'Panoramaweg', 'Hauptstraße'):
+        assert _alpine_name_warning(name) is None, name
+
+
+def test_named_way_warnings_match_along_route():
+    from simple_mbtiles_server.__main__ import _named_way_warnings, _E5
+
+    # a named way sitting right on the route
+    named = [(int(round(11.0 * _E5)), int(round(47.5 * _E5)), 'Stopselzieher')]
+    route = [[11.0, 47.5], [11.0005, 47.5005]]
+    warnings = _named_way_warnings(route, named)
+    assert len(warnings) == 1
+    assert 'Stopselzieher' in warnings[0]
+
+    # ... and one far away must not fire
+    far = [(int(round(12.0 * _E5)), int(round(48.0 * _E5)), 'Höllentalsteig')]
+    assert _named_way_warnings(route, far) == []
+
+
+def test_name_heuristic_is_suppressed_where_real_data_exists():
+    """
+    The "Hoellentalsteig" near Garmisch is tagged sac_scale=mountain_hiking
+    (T2). Warning about its name would contradict the actual data, so the
+    heuristic must stand down wherever a real grade is present -- and stay
+    active on untagged ways.
+    """
+    from simple_mbtiles_server.__main__ import (
+        _difficulty_tagged_indices, _named_way_warnings, _E5)
+
+    route = [[11.0, 47.5], [11.001, 47.5]]
+    named = [(int(round(11.0 * _E5)), int(round(47.5 * _E5)), 'Höllentalsteig')]
+
+    a = (int(round(11.0 * _E5)), int(round(47.5 * _E5)))
+    b = (int(round(11.001 * _E5)), int(round(47.5 * _E5)))
+
+    # tagged with a real grade -> no name warning
+    tagged = {(a, b): ('path', (('sac_scale', 'mountain_hiking'),))}
+    indices = _difficulty_tagged_indices(route, tagged)
+    assert indices == {0, 1}
+    assert _named_way_warnings(route, named, tagged_indices=indices) == []
+
+    # untagged -> heuristic still fires
+    untagged = {(a, b): ('path', (('surface', 'unpaved'),))}
+    indices = _difficulty_tagged_indices(route, untagged)
+    assert indices == set()
+    warnings = _named_way_warnings(route, named, tagged_indices=indices)
+    assert len(warnings) == 1
+    assert 'Höllentalsteig' in warnings[0]
+
+    # a via_ferrata_scale also counts as real data (the ferrata warning from
+    # _terrain_warnings covers it, no need for the name guess on top)
+    ferrata = {(a, b): ('path', (('via_ferrata_scale', '3'),))}
+    assert _difficulty_tagged_indices(route, ferrata) == {0, 1}
+
+
 def test_photon_url_prefers_internal_override():
     """
     PHOTONSERVER is baked into index.html by startup.sh, so it must stay the
@@ -752,6 +930,122 @@ def test_photon_url_prefers_internal_override():
     with open(template_path, encoding='utf-8') as f:
         template = f.read()
     assert set(re.findall(r'PHOTONSERVER\w*', template)) == {'PHOTONSERVER'}
+
+
+def test_coordinate_settings_present_in_both_uis():
+    """
+    Both index variants must offer the coordinate format setting and the
+    copy button -- index.html is generated from index_with_photon.html by
+    startup.sh only when PHOTONSERVER is set, so the plain one is a separate
+    file that silently drifts otherwise.
+    """
+    import re
+
+    root = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simple_mbtiles_server', 'vendor')
+
+    expected_formats = {'dd', 'dd_short', 'dms', 'dm', 'lonlat', 'osm', 'gmaps'}
+
+    for name in ('index.html', 'index_with_photon.html'):
+        with open(os.path.join(root, name), encoding='utf-8') as f:
+            html = f.read()
+
+        # settings UI
+        assert 'id="settings-btn"' in html, name
+        assert 'id="settings-panel"' in html, name
+        assert 'id="coord-format-select"' in html, name
+
+        # all formats offered
+        block = html.split('var COORD_FORMATS', 1)[1].split('};', 1)[0]
+        offered = set(re.findall(r"'(\w+)':\s*\{", block))
+        assert offered == expected_formats, (name, offered)
+
+        # copy button plus clipboard fallback for non-https contexts
+        assert 'class="coord-copy"' in html, name
+        assert 'navigator.clipboard' in html, name
+        assert 'execCommand' in html, name
+
+        # the format has to survive a reload
+        assert 'sms.coordFormat' in html, name
+
+        # coordinates must actually reach the popups
+        assert 'coordBlockHtml(' in html, name
+
+    # the POI popup carries coordinates only in the photon variant, since
+    # that is the one with a POI layer at all
+    with open(os.path.join(root, 'index_with_photon.html'), encoding='utf-8') as f:
+        photon = f.read()
+    assert 'poiPopupHtml(name, p.subclass, null, coords[1], coords[0])' in photon
+
+
+def test_sac_legend_matches_style_colors():
+    """
+    The osuv style colours paths by sac_scale (data-driven line-color) and
+    both index.html variants carry a legend. If the style colours change, the
+    legend must change with them -- otherwise the map lies to the user.
+    """
+    import json
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    style_path = os.path.join(root, 'simple_mbtiles_server', 'vendor',
+                              'osuv-style@1.0.0', 'style.json')
+    with open(style_path) as f:
+        style = json.load(f)
+
+    hiking = next(l for l in style['layers'] if l['id'] == 'path-hiking')
+    line_color = hiking['paint']['line-color']
+    assert line_color[0] == 'match'
+    assert line_color[1] == ['get', 'sac_scale']
+
+    # match expression: [match, input, key1, val1, ..., fallback]
+    pairs = dict(zip(line_color[2::2], line_color[3::2]))
+    from simple_mbtiles_server.__main__ import _SAC_SCALE_ORDER
+    assert set(pairs) == set(_SAC_SCALE_ORDER)
+    fallback = line_color[-1]
+
+    # ferrata layer exists and sits above path-hiking
+    ids = [l['id'] for l in style['layers']]
+    assert ids.index('path-via-ferrata') > ids.index('path-hiking')
+    assert ids.index('path-via-ferrata-halo') > ids.index('path-hiking')
+
+    for name in ('index.html', 'index_with_photon.html'):
+        with open(os.path.join(root, 'simple_mbtiles_server', 'vendor', name),
+                  encoding='utf-8') as f:
+            html = f.read()
+        legend = html.split('id="sac-legend"', 1)[1].split('</div>\n    <div', 1)[0]
+        swatches = re.findall(r'border-top-color:(#[0-9a-fA-F]+)', legend)
+        # every style colour (grades + fallback) must appear in the legend
+        for colour in list(pairs.values()) + [fallback]:
+            assert colour in swatches, '%s missing %s' % (name, colour)
+
+
+def test_frontend_offers_all_sac_grades():
+    """
+    The map UI carries its own copy of the SAC grade list in a <select>.
+    If the server ever gains or renames a grade, the dropdown must follow --
+    an unknown value would come back as HTTP 400.
+    """
+    import re
+
+    from simple_mbtiles_server.__main__ import _SAC_SCALE_ORDER
+
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'simple_mbtiles_server', 'vendor', 'index_with_photon.html')
+    with open(path, encoding='utf-8') as f:
+        html = f.read()
+
+    block = html.split('id="route-sac"', 1)[1].split('</select>', 1)[0]
+    offered = re.findall(r'<option value="(\w+)"', block)
+    assert offered == list(_SAC_SCALE_ORDER)
+
+    # and the request must actually carry the parameters
+    assert 'max_sac_scale=' in html
+    assert 'allow_via_ferrata=false' in html
+    # excluding ferratas is the default for a hiking UI
+    assert 'id="route-no-ferrata" checked' in html
 
 
 def test_frontend_poi_categories_match_server():

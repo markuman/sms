@@ -144,8 +144,122 @@
         color: white;
         border-color: #1d4ed8;
       }
-      #route-profile {
+      #route-profile, #route-sac {
         display: none;
+      }
+      #route-ferrata-label {
+        display: none;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: #374151;
+        white-space: nowrap;
+        cursor: pointer;
+        padding: 0 4px;
+      }
+      #route-ferrata-label input { cursor: pointer; margin: 0; }
+      #route-warnings {
+        display: none;
+        max-width: 340px;
+        font-size: 11px;
+        line-height: 1.5;
+        color: #92400e;
+        background: #fffbeb;
+        border: 1px solid #fcd34d;
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
+      .coord-block {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 4px 0;
+      }
+      .coord-block .coord-text {
+        font-family: monospace;
+        font-size: 12px;
+        word-break: break-all;
+        user-select: all;
+      }
+      .coord-copy {
+        flex-shrink: 0;
+        border: 1px solid #d1d5db;
+        background: #f9fafb;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 12px;
+        line-height: 1;
+        padding: 2px 5px;
+        color: #374151;
+      }
+      .coord-copy:hover { background: #e5e7eb; }
+      #settings-panel {
+        display: none;
+        position: absolute;
+        top: 44px;
+        right: 10px;
+        z-index: 40;
+        background: #fff;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+        padding: 10px 12px;
+        font-size: 12px;
+        color: #374151;
+        min-width: 250px;
+      }
+      #settings-panel h4 {
+        margin: 0 0 6px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+      #settings-panel select {
+        width: 100%;
+        font-size: 12px;
+        padding: 3px;
+        border: 1px solid #d1d5db;
+        border-radius: 3px;
+      }
+      #settings-panel .setting-preview {
+        margin-top: 6px;
+        font-family: monospace;
+        font-size: 11px;
+        color: #6b7280;
+        word-break: break-all;
+      }
+      #settings-panel .setting-note {
+        margin-top: 8px;
+        padding-top: 6px;
+        border-top: 1px solid #e5e7eb;
+        font-size: 10px;
+        color: #9ca3af;
+        line-height: 1.5;
+      }
+      #sac-legend {
+        display: none;
+        position: absolute;
+        bottom: 28px;
+        left: 10px;
+        z-index: 30;
+        background: rgba(255,255,255,0.95);
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        padding: 8px 12px;
+        font-size: 11px;
+        line-height: 1.7;
+        color: #374151;
+        max-width: 280px;
+      }
+      #sac-legend .sac-row { display: flex; align-items: center; gap: 8px; }
+      #sac-legend .sac-swatch {
+        display: inline-block; width: 26px; height: 0;
+        border-top-width: 3px; border-top-style: dashed;
+        flex-shrink: 0;
+      }
+      #sac-legend .sac-note {
+        margin-top: 6px; padding-top: 6px; border-top: 1px solid #e5e7eb;
+        color: #6b7280; font-size: 10px; line-height: 1.5;
       }
       #route-status {
         font-size: 13px;
@@ -166,6 +280,27 @@
   </head>
   <body>
     <div id="map"></div>
+    <div id="settings-panel">
+      <h4>Koordinaten-Format</h4>
+      <select id="coord-format-select"></select>
+      <div class="setting-preview" id="coord-format-preview"></div>
+      <div class="setting-note">Gilt für Popups von POIs und Punkt-Info.
+      Der ⧉-Knopf kopiert in die Zwischenablage.</div>
+    </div>
+    <div id="sac-legend">
+      <strong>Wegschwierigkeit (SAC)</strong>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#e8a010"></span> T1 Wandern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#1060b0"></span> T2 Bergwandern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#0a3d78"></span> T3 anspruchsvolles Bergwandern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#5b21b6"></span> T4 Alpinwandern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#3b0764"></span> T5 anspruchsvolles Alpinwandern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#18181b"></span> T6 schwieriges Alpinwandern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#dc2626;border-top-style:dotted;border-top-width:4px"></span> Klettersteig / Leitern</div>
+      <div class="sac-row"><span class="sac-swatch" style="border-top-color:#d04020"></span> ohne Angabe</div>
+      <div class="sac-note">Einstufung aus OSM (<code>sac_scale</code>), nur wo
+      erfasst — „ohne Angabe" heißt unbekannt, nicht einfach. Sichtbar ab
+      Zoom 14, Stil „osuv".</div>
+    </div>
     <div id="panel">
       <button id="toolbar-toggle" title="Werkzeuge ein/ausblenden">⧼</button>
       <div id="toolbar">
@@ -185,12 +320,27 @@
       <button id="measure-btn" class="toolbar-btn" title="Distanz messen (Klick: Punkt setzen, Doppelklick: beenden)">📏</button>
       <span id="measure-result" style="display:none"></span>
       <button id="info-btn" class="toolbar-btn" title="Punkt-Info: Klick auf Karte zeigt Koordinaten und Adresse">📍 Info</button>
-      <button id="route-btn" class="toolbar-btn" title="Route berechnen (Fuß / Fahrrad)">🔀 Route</button>
-      <select id="route-profile" class="toolbar-btn">
-        <option value="foot">Fuß</option>
-        <option value="bike">Fahrrad</option>
+      <button id="settings-btn" class="toolbar-btn" title="Einstellungen">⚙</button>
+      <button id="route-btn" class="toolbar-btn" title="Route berechnen (Wandern / Fahrrad)">🔀 Route</button>
+      <select id="route-profile" class="toolbar-btn" title="Verkehrsmittel">
+        <option value="foot">🥾 Wandern</option>
+        <option value="bike">🚲 Fahrrad</option>
       </select>
+      <select id="route-sac" class="toolbar-btn" title="Maximale Schwierigkeit (SAC-Skala). Wirkt nur auf Wege, die in OSM einen sac_scale-Tag haben.">
+        <option value="">Schwierigkeit: egal</option>
+        <option value="hiking">T1 – Wandern</option>
+        <option value="mountain_hiking">T2 – Bergwandern</option>
+        <option value="demanding_mountain_hiking">T3 – anspruchsvoll</option>
+        <option value="alpine_hiking">T4 – alpin</option>
+        <option value="demanding_alpine_hiking">T5 – anspruchsvoll alpin</option>
+        <option value="difficult_alpine_hiking">T6 – schwierig alpin</option>
+      </select>
+      <label id="route-ferrata-label" title="Klettersteige und Leitern aus der Route ausschließen">
+        <input type="checkbox" id="route-no-ferrata" checked> ohne Klettersteig
+      </label>
+      <button id="sac-legend-btn" class="toolbar-btn" title="Legende: Wegschwierigkeit (SAC-Skala)">🗺️ SAC</button>
       <span id="route-status"></span>
+      <div id="route-warnings"></div>
       <label id="contour-toggle">
         <input type="checkbox" id="contour-checkbox">
         Höhenlinien
@@ -548,8 +698,13 @@
           routeTotalKm  = 0;
           routeTotalMin = 0;
           routeEle      = null;
+          routeWarnings = [];
+          renderRouteWarnings();
           document.getElementById('route-btn').classList.remove('active');
-          document.getElementById('route-profile').style.display = 'none';
+          ['route-profile','route-sac','route-ferrata-label','route-warnings'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+          });
           map.getCanvasContainer().classList.remove('route-active');
           map.off('click', onRouteClick);
           routeMarkers.forEach(function(m) { m.remove(); });
@@ -588,12 +743,37 @@
           });
         }
 
+        var routeWarnings = [];
+
+        function renderRouteWarnings() {
+          var box = document.getElementById('route-warnings');
+          if (!box) return;
+          if (routeWarnings.length === 0) {
+            box.style.display = 'none';
+            box.innerHTML = '';
+            return;
+          }
+          var html = routeWarnings.slice(0, 4).map(function(w) {
+            return '⚠️ ' + w.replace(/(https:\/\/www\.openstreetmap\.org\/way\/\d+)/,
+              '<a href="$1" target="_blank" rel="noopener">OSM</a>');
+          }).join('<br>');
+          if (routeWarnings.length > 4) {
+            html += '<br>… und ' + (routeWarnings.length - 4) + ' weitere';
+          }
+          box.innerHTML = html;
+          box.style.display = 'block';
+        }
+
         function fetchSegment(from, to, onSuccess, onError) {
           var profile = document.getElementById('route-profile').value;
+          var maxSac  = document.getElementById('route-sac').value;
+          var noFerrata = document.getElementById('route-no-ferrata').checked;
           var url = '/v1/route/' + routeTilesId + '@' + routeTilesVer +
             '?from=' + from[1] + ',' + from[0] +
             '&to='   + to[1]   + ',' + to[0] +
             '&profile=' + profile;
+          if (maxSac) url += '&max_sac_scale=' + maxSac;
+          if (noFerrata) url += '&allow_via_ferrata=false';
           setRouteStatus('Berechne Route …');
           fetch(url)
             .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
@@ -603,6 +783,11 @@
                 onError(res.body.error || 'Keine Route gefunden');
                 return;
               }
+              var props = res.body.properties || {};
+              (props.terrain_warnings || []).forEach(function(w) {
+                if (routeWarnings.indexOf(w) === -1) routeWarnings.push(w);
+              });
+              renderRouteWarnings();
               onSuccess(res.body);
               setRouteStatus('');
             })
@@ -667,17 +852,21 @@
             routeActive = true;
             this.classList.add('active');
             document.getElementById('route-profile').style.display = '';
+            document.getElementById('route-sac').style.display = '';
+            document.getElementById('route-ferrata-label').style.display = 'inline-flex';
             map.getCanvasContainer().classList.add('route-active');
             map.on('click', onRouteClick);
             setRouteStatus('Startpunkt klicken');
           }
         });
 
-        // Profil ändern → alle segmente neu berechnen
-        document.getElementById('route-profile').addEventListener('change', function() {
+        // Profil / Schwierigkeit / Klettersteig ändern → alles neu berechnen
+        function recalcRoute() {
           if (routePoints.length < 2) return;
           var points = routePoints.slice();
           routeSegments = [];
+          routeWarnings = [];
+          renderRouteWarnings();
           routeTotalKm  = 0;
           routeTotalMin = 0;
           routeEle      = null;
@@ -703,6 +892,17 @@
             );
           }
           fetchNext(0);
+        }
+
+        ['route-profile', 'route-sac', 'route-no-ferrata'].forEach(function(id) {
+          document.getElementById(id).addEventListener('change', recalcRoute);
+        });
+
+        document.getElementById('sac-legend-btn').addEventListener('click', function() {
+          var box = document.getElementById('sac-legend');
+          var visible = box.style.display === 'block';
+          box.style.display = visible ? 'none' : 'block';
+          this.classList.toggle('active', !visible);
         });
         // --- Ende Routing ---
 
@@ -717,22 +917,116 @@
           map.off('click', onInfoClick);
         }
 
+        // --- Koordinaten-Formate -------------------------------------------
+        // Format wird in localStorage gehalten, damit es einen Reload übersteht.
+        var COORD_FORMATS = {
+          'dd':      { label: 'Dezimalgrad (47.421100, 10.985500)' },
+          'dd_short':{ label: 'Dezimalgrad kurz (47.4211, 10.9855)' },
+          'dms':     { label: 'Grad/Minute/Sekunde (47° 25\' 16.0" N)' },
+          'dm':      { label: 'Grad/Dezimalminute (47° 25.267\' N)' },
+          'lonlat':  { label: 'lon,lat für GeoJSON (10.985500, 47.421100)' },
+          'osm':     { label: 'OSM-Link' },
+          'gmaps':   { label: 'Google-Maps-Link' }
+        };
+
+        function getCoordFormat() {
+          var f = null;
+          try { f = localStorage.getItem('sms.coordFormat'); } catch (e) {}
+          return COORD_FORMATS[f] ? f : 'dd';
+        }
+
+        function setCoordFormat(f) {
+          try { localStorage.setItem('sms.coordFormat', f); } catch (e) {}
+        }
+
+        function _dms(deg, pos, neg) {
+          var d = Math.abs(deg);
+          var dFloor = Math.floor(d);
+          var mAll = (d - dFloor) * 60;
+          var mFloor = Math.floor(mAll);
+          var sec = ((mAll - mFloor) * 60).toFixed(1);
+          return dFloor + '° ' + mFloor + '\' ' + sec + '" ' + (deg >= 0 ? pos : neg);
+        }
+
+        function _dm(deg, pos, neg) {
+          var d = Math.abs(deg);
+          var dFloor = Math.floor(d);
+          var mAll = ((d - dFloor) * 60).toFixed(3);
+          return dFloor + '° ' + mAll + '\' ' + (deg >= 0 ? pos : neg);
+        }
+
+        // Reine Textform für die Zwischenablage
+        function formatCoords(lat, lon, fmt) {
+          fmt = fmt || getCoordFormat();
+          switch (fmt) {
+            case 'dd_short': return lat.toFixed(4) + ', ' + lon.toFixed(4);
+            case 'dms':      return _dms(lat, 'N', 'S') + ' ' + _dms(lon, 'E', 'W');
+            case 'dm':       return _dm(lat, 'N', 'S') + ' ' + _dm(lon, 'E', 'W');
+            case 'lonlat':   return lon.toFixed(6) + ', ' + lat.toFixed(6);
+            case 'osm':      return 'https://www.openstreetmap.org/?mlat=' +
+                                    lat.toFixed(6) + '&mlon=' + lon.toFixed(6) + '#map=16/' +
+                                    lat.toFixed(5) + '/' + lon.toFixed(5);
+            case 'gmaps':    return 'https://www.google.com/maps?q=' +
+                                    lat.toFixed(6) + ',' + lon.toFixed(6);
+            default:         return lat.toFixed(6) + ', ' + lon.toFixed(6);
+          }
+        }
+
+        function copyToClipboard(text, btn) {
+          function done(ok) {
+            if (!btn) return;
+            var old = btn.textContent;
+            btn.textContent = ok ? '✓' : '✗';
+            setTimeout(function() { btn.textContent = old; }, 1200);
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() { done(true); },
+                                                     function() { done(false); });
+            return;
+          }
+          // Fallback für http-Kontexte ohne Clipboard-API
+          try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            done(ok);
+          } catch (e) { done(false); }
+        }
+
+        // Klick-Delegation: alle Copy-Buttons in Popups
+        document.addEventListener('click', function(e) {
+          var btn = e.target.closest && e.target.closest('.coord-copy');
+          if (!btn) return;
+          e.preventDefault();
+          e.stopPropagation();
+          copyToClipboard(btn.getAttribute('data-coord'), btn);
+        });
+
+        // Koordinaten-Zeile für Popups: monospace + Copy-Button
+        function coordBlockHtml(lat, lon) {
+          var txt = formatCoords(lat, lon);
+          var esc = txt.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                       .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return '<div class="coord-block">' +
+                 '<span class="coord-text">' + esc + '</span>' +
+                 '<button class="coord-copy" data-coord="' + esc +
+                 '" title="Koordinaten kopieren">⧉</button></div>';
+        }
+        // --- Ende Koordinaten-Formate --------------------------------------
+
         function onInfoClick(e) {
           var lat = e.lngLat.lat;
           var lon = e.lngLat.lng;
-          var dms = function(deg, pos, neg) {
-            var d = Math.abs(deg);
-            var dFloor = Math.floor(d);
-            var mAll = (d - dFloor) * 60;
-            var mFloor = Math.floor(mAll);
-            var s = ((mAll - mFloor) * 60).toFixed(2);
-            return dFloor + '° ' + mFloor + '\' ' + s + '" ' + (deg >= 0 ? pos : neg);
-          };
           var html =
             '<div style="font-size:13px;line-height:1.7">' +
-            '<strong>Koordinaten</strong><br>' +
-            '<span style="font-family:monospace">' + lat.toFixed(6) + ', ' + lon.toFixed(6) + '</span><br>' +
-            '<span style="color:#888;font-size:11px">' + dms(lat,'N','S') + ' &nbsp; ' + dms(lon,'E','W') + '</span>' +
+            '<strong>Koordinaten</strong>' + coordBlockHtml(lat, lon) +
+            (getCoordFormat() === 'dd' ? '' :
+              '<span style="color:#888;font-size:11px;font-family:monospace">' +
+              lat.toFixed(6) + ', ' + lon.toFixed(6) + '</span>') +
             '</div>';
           if (infoPopup) infoPopup.remove();
           infoPopup = new maplibregl.Popup({ closeOnClick: true, maxWidth: '280px' })
@@ -786,6 +1080,59 @@
           };
           reader.readAsText(file);
         });
+        // --- Einstellungen -------------------------------------------------
+        (function initSettings() {
+          var sel = document.getElementById('coord-format-select');
+          var preview = document.getElementById('coord-format-preview');
+          var panel = document.getElementById('settings-panel');
+          // Beispielkoordinate: Zugspitze
+          var SAMPLE_LAT = 47.421100, SAMPLE_LON = 10.985500;
+
+          Object.keys(COORD_FORMATS).forEach(function(key) {
+            var opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = COORD_FORMATS[key].label;
+            sel.appendChild(opt);
+          });
+          sel.value = getCoordFormat();
+
+          function updatePreview() {
+            preview.textContent = formatCoords(SAMPLE_LAT, SAMPLE_LON, sel.value);
+          }
+          updatePreview();
+
+          sel.addEventListener('change', function() {
+            setCoordFormat(sel.value);
+            updatePreview();
+            // offene Popups mit dem alten Format schließen, damit nichts
+            // Widersprüchliches stehen bleibt
+            if (infoPopup) { infoPopup.remove(); infoPopup = null; }
+          });
+
+          document.getElementById('settings-btn').addEventListener('click', function(e) {
+            e.stopPropagation();
+            var visible = panel.style.display === 'block';
+            panel.style.display = visible ? 'none' : 'block';
+            this.classList.toggle('active', !visible);
+          });
+
+          // Klick außerhalb schließt das Panel
+          document.addEventListener('click', function(e) {
+            if (panel.style.display !== 'block') return;
+            if (panel.contains(e.target)) return;
+            if (e.target.closest && e.target.closest('#settings-btn')) return;
+            panel.style.display = 'none';
+            document.getElementById('settings-btn').classList.remove('active');
+          });
+
+          document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && panel.style.display === 'block') {
+              panel.style.display = 'none';
+              document.getElementById('settings-btn').classList.remove('active');
+            }
+          });
+        })();
+        // --- Ende Einstellungen --------------------------------------------
 			</script>
   </body>
 </html>

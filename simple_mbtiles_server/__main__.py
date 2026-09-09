@@ -232,8 +232,28 @@ _POI_CATEGORY_FILTERS = {
         'class': {'shelter'},
     },
     'camp_site': {
-        'subclass': {'camp_site', 'caravan_site'},
+        'subclass': {'camp_site', 'caravan_site', 'camp_pitch'},
         'class': {'campsite'},
+    },
+    # The following need the osuv planetiler fork -- stock OpenMapTiles does
+    # not put springs, wells or cave entrances into the poi layer at all.
+    'drinking_water': {
+        'subclass': {'drinking_water', 'water_point', 'water_well', 'water_tap',
+                     'spring', 'spring_box', 'watering_place', 'cistern'},
+        'class': {'drinking_water'},
+    },
+    'cave': {
+        'subclass': {'cave_entrance', 'sinkhole'},
+        'class': {'cave_entrance'},
+    },
+    'viewpoint': {
+        'subclass': {'viewpoint', 'peak', 'saddle', 'tower', 'arch', 'volcano'},
+        'class': {'viewpoint', 'peak'},
+    },
+    'emergency': {
+        'subclass': {'phone', 'access_point', 'defibrillator', 'life_ring',
+                     'mountain_rescue', 'ranger_station'},
+        'class': {'emergency', 'mountain_rescue'},
     },
 }
 
@@ -496,6 +516,48 @@ _ROUTING_PROFILES = {
     },
 }
 
+# Surface penalties per profile, applied on top of the road class factor.
+# Needs the osuv planetiler fork (stock OpenMapTiles has no smoothness or
+# tracktype); untagged ways get no penalty at all.
+#
+# For bikepacking these matter more than the road class: a "track" can be
+# smooth gravel or a rutted mess, and with luggage that is the difference
+# between 20 km/h and pushing.
+_SMOOTHNESS_PENALTY = {
+    'bike': {
+        'excellent': 1.0, 'good': 1.0, 'intermediate': 1.15,
+        'bad': 1.5, 'very_bad': 2.2, 'horrible': 3.5,
+        'very_horrible': 5.0, 'impassable': None,
+    },
+    'foot': {
+        # on foot the surface barely matters until it becomes scrambling
+        'very_horrible': 1.2, 'impassable': 2.0,
+    },
+}
+
+_TRACKTYPE_PENALTY = {
+    'bike': {
+        'grade1': 1.0, 'grade2': 1.1, 'grade3': 1.3,
+        'grade4': 1.6, 'grade5': 2.0,
+    },
+    'foot': {},
+}
+
+# SAC grades cost extra time on foot even when allowed: T3+ means scrambling
+# sections, not walking pace.
+_SAC_PENALTY = {
+    'foot': {
+        'hiking': 1.0,
+        'mountain_hiking': 1.1,
+        'demanding_mountain_hiking': 1.4,
+        'alpine_hiking': 1.8,
+        'demanding_alpine_hiking': 2.4,
+        'difficult_alpine_hiking': 3.0,
+    },
+    'bike': {},
+}
+
+
 # Average travel speeds used for duration estimate.
 _PROFILE_SPEED_KMH = {'foot': 4.5, 'bike': 15.0}
 
@@ -508,6 +570,71 @@ _KNOWN_ROAD_CLASSES = frozenset(
     for cls, factor in profile.items()
     if factor is not None
 )
+
+# Via ferratas and exposed ridges ARE in the data -- as plain class=path,
+# indistinguishable from a forest track. Around the Zugspitze a route from the
+# summit to the Alpspitze happily runs over "Stopselzieher", "Hoellentalsteig"
+# and "Nordwandsteig", all of them cabled climbing routes.
+#
+# Since sac_scale and via_ferrata_scale do not exist in OpenMapTiles, the only
+# remaining signal is the *name* carried by the transportation_name layer.
+# This is a crude heuristic in German/Italian/French alpine naming, it produces
+# false positives ("Rindersteig" is a normal trail) and it misses anything
+# unnamed -- but flagging a possible via ferrata is far better than silence.
+_ALPINE_NAME_HINTS = (
+    ('klettersteig', 'via ferrata'),
+    ('ferrata', 'via ferrata'),
+    ('stopselzieher', 'cabled climbing route on the Zugspitze'),
+    ('jubilaeumsgrat', 'exposed alpine ridge'),
+    ('jubiläumsgrat', 'exposed alpine ridge'),
+    ('grat', 'ridge -- may be exposed'),
+    ('steig', 'alpine "Steig" -- may be secured or exposed'),
+    ('sentiero attrezzato', 'via ferrata'),
+    ('vie ferrate', 'via ferrata'),
+)
+
+
+def _alpine_name_warning(name):
+    """Return a warning string if a way name suggests exposed terrain."""
+    low = name.lower()
+    for needle, meaning in _ALPINE_NAME_HINTS:
+        if needle in low:
+            return '%s (%s)' % (name, meaning)
+    return None
+
+
+# Terrain attributes OpenMapTiles does carry on the transportation layer.
+# Verified against real tiles (Ammergau Alps, z14): surface and mtb_scale show
+# up, sac_scale / trail_visibility / via_ferrata_scale / access do NOT exist in
+# the schema at all.  Coverage is thin -- in a 9-tile sample only 11 of ~180
+# ways had mtb_scale -- so absence of a warning means nothing.
+_TERRAIN_HINT_KEYS = (
+    'surface', 'mtb_scale', 'brunnel', 'foot', 'bicycle', 'horse',
+    # osuv planetiler fork -- absent in stock OpenMapTiles tiles
+    'sac_scale', 'trail_visibility', 'via_ferrata_scale', 'ladder',
+    'incline', 'smoothness', 'width', 'tracktype', 'osm_id',
+)
+
+# SAC hiking scale, ascending difficulty. T1 is a wide path, T6 is climbing
+# terrain. Order matters: it is used to compare against max_sac_scale.
+_SAC_SCALE_ORDER = (
+    'hiking',                        # T1
+    'mountain_hiking',               # T2
+    'demanding_mountain_hiking',     # T3
+    'alpine_hiking',                 # T4
+    'demanding_alpine_hiking',       # T5
+    'difficult_alpine_hiking',       # T6
+)
+_SAC_SCALE_RANK = {name: i for i, name in enumerate(_SAC_SCALE_ORDER)}
+_SAC_SCALE_LABEL = {name: 'T%d' % (i + 1) for i, name in enumerate(_SAC_SCALE_ORDER)}
+
+# Trail visibility values that mean "you can lose the path".
+_POOR_VISIBILITY = ('bad', 'horrible', 'no')
+
+# mtb_scale 4+ is expert MTB terrain, which on foot usually means steep,
+# rocky and exposed. Not a substitute for sac_scale, but a real signal.
+_MTB_SCALE_ALERT = 4
+
 
 # Graph nodes are integer tuples of degrees * 1e5 (about 1 m resolution).
 # Integers snap tile borders together exactly and keep the cache compact.
@@ -582,11 +709,20 @@ def _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
 def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
     """
     Parse a raw MVT blob and extract every usable transportation segment.
-    Returns a list of (node_a, node_b, dist_km, road_class).
+    Returns (segments, named_ways):
+    segments   -- list of (node_a, node_b, dist_km, road_class, hints)
+    named_ways -- (lon_e5, lat_e5, name) for ways whose *name* suggests
+                  exposed terrain (see _alpine_name_warning)
 
     Nodes are (lon_e5, lat_e5) integer tuples (about 1 m resolution).  The
     routing profile is deliberately *not* applied here, so a cached tile can
     serve any profile.
+
+    *hints* carries the few terrain attributes OpenMapTiles actually ships
+    (surface, mtb_scale, brunnel, foot/bicycle/horse access).  They are
+    sparse -- see _TERRAIN_HINT_KEYS -- but a path tagged mtb_scale=4 is
+    still worth surfacing.  It is stored as a tuple so decoded tiles stay
+    hashable and cheap.
     """
     try:
         data = zlib.decompress(raw_tile, wbits=32 + zlib.MAX_WBITS)
@@ -594,6 +730,7 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
         data = raw_tile
 
     segments = []
+    named_ways = []
     pos = 0
 
     while pos < len(data):
@@ -612,6 +749,27 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
             if field != 3:  # not a Tile.Layer
                 continue
             layer_name, keys, values, raw_features, extent = _parse_mvt_layer(chunk)
+            if layer_name == 'transportation_name':
+                # Names live in their own layer; keep the geometry so we can
+                # match them against a finished route later.
+                for rf in raw_features:
+                    tags, geom_type, geometry = _parse_mvt_feature(rf)
+                    if geom_type != 2:
+                        continue
+                    props = {}
+                    for ki in range(0, len(tags) - 1, 2):
+                        k, v = tags[ki], tags[ki + 1]
+                        if k < len(keys) and v < len(values):
+                            props[keys[k]] = values[v]
+                    name = props.get('name')
+                    if not name or not _alpine_name_warning(name):
+                        continue
+                    for coords in _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
+                        for point in coords:
+                            named_ways.append(
+                                (int(round(point[0] * _E5)),
+                                 int(round(point[1] * _E5)), name))
+                continue
             if layer_name != 'transportation':
                 continue
             for rf in raw_features:
@@ -626,6 +784,11 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
                 road_class = props.get('class', '')
                 if road_class not in _KNOWN_ROAD_CLASSES:
                     continue
+                hints = tuple(
+                    (key, props[key])
+                    for key in _TERRAIN_HINT_KEYS
+                    if props.get(key) not in (None, '')
+                )
                 for coords in _decode_mvt_geometry(geometry, tile_x, tile_y, zoom, extent):
                     for j in range(len(coords) - 1):
                         a, b = coords[j], coords[j + 1]
@@ -634,7 +797,7 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
                         if node_a == node_b:
                             continue
                         dist = _haversine(a[0], a[1], b[0], b[1])
-                        segments.append((node_a, node_b, dist, road_class))
+                        segments.append((node_a, node_b, dist, road_class, hints))
         elif wire == 0:
             try:
                 _, pos = _varint(data, pos)
@@ -645,7 +808,7 @@ def _extract_road_segments(raw_tile, tile_x, tile_y, zoom):
         elif wire == 1:
             pos += 8
 
-    return segments
+    return segments, named_ways
 
 
 def _extract_contour_lines(raw_tile, tile_x, tile_y, zoom):
@@ -894,7 +1057,56 @@ def _duration_min(profile, dist_km, ascent_m=None, descent_m=None):
     return max(flat, vertical) + min(flat, vertical) / 2.0
 
 
-def _build_graph(all_segments, profile):
+def _hint_penalty(hints, profile):
+    """
+    Extra weight factor from terrain attributes, or None when the segment is
+    impassable for the profile.  Untagged segments always return 1.0, so
+    nothing changes on stock OpenMapTiles tiles.
+    """
+    if not hints:
+        return 1.0
+    hint = dict(hints)
+    factor = 1.0
+
+    smoothness = _SMOOTHNESS_PENALTY.get(profile, {}).get(hint.get('smoothness'))
+    if smoothness is None and hint.get('smoothness') in ('impassable',):
+        return None
+    if smoothness is not None:
+        factor *= smoothness
+
+    tracktype = _TRACKTYPE_PENALTY.get(profile, {}).get(hint.get('tracktype'))
+    if tracktype is not None:
+        factor *= tracktype
+
+    sac = _SAC_PENALTY.get(profile, {}).get(hint.get('sac_scale'))
+    if sac is not None:
+        factor *= sac
+
+    return factor
+
+
+def _segment_too_hard(hints, max_sac_rank, allow_via_ferrata):
+    """
+    True when a segment exceeds the requested difficulty limit.
+
+    Only filters on data that is actually present: an untagged way is never
+    excluded, because most of the world has no sac_scale at all and a strict
+    default would silently produce "no route found" everywhere.
+    """
+    if not hints:
+        return False
+    hint = dict(hints)
+    if not allow_via_ferrata:
+        if hint.get('via_ferrata_scale') or hint.get('ladder') in ('yes', '1'):
+            return True
+    if max_sac_rank is not None:
+        rank = _SAC_SCALE_RANK.get(hint.get('sac_scale'))
+        if rank is not None and rank > max_sac_rank:
+            return True
+    return False
+
+
+def _build_graph(all_segments, profile, max_sac_scale=None, allow_via_ferrata=True):
     """
     Build a bidirectional adjacency graph for *profile*.
 
@@ -903,15 +1115,207 @@ def _build_graph(all_segments, profile):
     node -> [(neighbour, weighted_km, real_km), ...].
     """
     weights = _ROUTING_PROFILES.get(profile, _ROUTING_PROFILES['foot'])
+    max_sac_rank = _SAC_SCALE_RANK.get(max_sac_scale) if max_sac_scale else None
     graph = {}
-    for node_a, node_b, dist, road_class in all_segments:
+    edge_hints = {}
+    for segment in all_segments:
+        node_a, node_b, dist, road_class = segment[:4]
+        hints = segment[4] if len(segment) > 4 else ()
         factor = weights.get(road_class)
         if factor is None:
             continue
-        weighted = dist * factor
+        if _segment_too_hard(hints, max_sac_rank, allow_via_ferrata):
+            continue
+        penalty = _hint_penalty(hints, profile)
+        if penalty is None:
+            continue
+        weighted = dist * factor * penalty
         graph.setdefault(node_a, []).append((node_b, weighted, dist))
         graph.setdefault(node_b, []).append((node_a, weighted, dist))
-    return graph
+        if hints:
+            key = (node_a, node_b) if node_a < node_b else (node_b, node_a)
+            edge_hints[key] = (road_class, hints)
+    return graph, edge_hints
+
+
+def _difficulty_tagged_indices(path_coords, edge_hints):
+    """
+    Indices of route points that sit on a way with real difficulty data.
+
+    Used to suppress the name heuristic where actual tags exist: the
+    "Hoellentalsteig" near Garmisch is tagged sac_scale=mountain_hiking (T2),
+    so warning about its name would contradict the data.
+    """
+    tagged = set()
+    for i in range(len(path_coords) - 1):
+        a = (int(round(path_coords[i][0] * _E5)), int(round(path_coords[i][1] * _E5)))
+        b = (int(round(path_coords[i + 1][0] * _E5)), int(round(path_coords[i + 1][1] * _E5)))
+        entry = edge_hints.get((a, b) if a < b else (b, a))
+        if not entry:
+            continue
+        hint = dict(entry[1])
+        if hint.get('sac_scale') or hint.get('via_ferrata_scale') or hint.get('ladder'):
+            tagged.add(i)
+            tagged.add(i + 1)
+    return tagged
+
+
+def _named_way_warnings(path_coords, named_ways, tolerance_km=0.03,
+                        tagged_indices=None):
+    """
+    Flag ways along the route whose name suggests a via ferrata or an exposed
+    ridge.  Matching is by proximity (30 m) because the name layer carries its
+    own generalised geometry, not the routing graph's nodes.
+
+    This is a fallback for tiles without difficulty data.  Route points listed
+    in *tagged_indices* already carry a real sac_scale or via_ferrata_scale and
+    are skipped -- otherwise a way tagged T2 would still be flagged just for
+    being called "...steig", which is a false alarm that undermines the
+    warnings that matter.
+    """
+    if not named_ways:
+        return []
+
+    # coarse grid so this stays linear instead of len(route) * len(names)
+    cell = 0.005
+    index = {}
+    for lon_e5, lat_e5, name in named_ways:
+        lon = lon_e5 / _E5
+        lat = lat_e5 / _E5
+        index.setdefault((int(lon / cell), int(lat / cell)), []).append((lon, lat, name))
+
+    found = {}
+    for point_index, (lon, lat) in enumerate(path_coords):
+        if tagged_indices and point_index in tagged_indices:
+            continue  # real data wins over the name
+        cx = int(lon / cell)
+        cy = int(lat / cell)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for nlon, nlat, name in index.get((cx + dx, cy + dy), ()):
+                    if name in found:
+                        continue
+                    if _haversine(lon, lat, nlon, nlat) <= tolerance_km:
+                        found[name] = True
+
+    return [
+        'route follows "%s" -- name suggests exposed or secured terrain; '
+        'vector tiles cannot confirm the difficulty, verify on a topographic map'
+        % _alpine_name_warning(name)
+        for name in sorted(found)
+    ]
+
+
+def _terrain_warnings(path_coords, edge_hints):
+    """
+    Collect terrain hints along a finished route.
+
+    Returns (warnings, stats).  Only reports what is actually tagged -- the
+    data is far too sparse to conclude a path is harmless from silence.
+    """
+    surfaces = {}
+    steep = []
+    sac_hits = {}
+    ferrata = []
+    poor_visibility = []
+    for i in range(len(path_coords) - 1):
+        a = (int(round(path_coords[i][0] * _E5)), int(round(path_coords[i][1] * _E5)))
+        b = (int(round(path_coords[i + 1][0] * _E5)), int(round(path_coords[i + 1][1] * _E5)))
+        key = (a, b) if a < b else (b, a)
+        entry = edge_hints.get(key)
+        if not entry:
+            continue
+        _road_class, hints = entry
+        hint = dict(hints)
+        if 'surface' in hint:
+            surfaces[hint['surface']] = surfaces.get(hint['surface'], 0) + 1
+
+        # Real difficulty data (osuv planetiler fork). Where present this beats
+        # every heuristic; where absent nothing can be concluded.
+        sac = hint.get('sac_scale')
+        if sac in _SAC_SCALE_RANK and sac not in sac_hits:
+            sac_hits[sac] = (round(path_coords[i][1], 5),
+                             round(path_coords[i][0], 5),
+                             hint.get('osm_id'))
+        if hint.get('via_ferrata_scale') or hint.get('ladder') in ('yes', '1'):
+            ferrata.append((round(path_coords[i][1], 5), round(path_coords[i][0], 5),
+                            hint.get('via_ferrata_scale') or 'ladder',
+                            hint.get('osm_id')))
+        vis = hint.get('trail_visibility')
+        if vis in _POOR_VISIBILITY and vis not in [v[2] for v in poor_visibility]:
+            poor_visibility.append((round(path_coords[i][1], 5),
+                                    round(path_coords[i][0], 5), vis))
+        scale = hint.get('mtb_scale')
+        if scale is not None:
+            try:
+                if int(scale) >= _MTB_SCALE_ALERT:
+                    steep.append((round(path_coords[i][1], 5),
+                                  round(path_coords[i][0], 5), int(scale)))
+            except (TypeError, ValueError):
+                pass
+
+    warnings = []
+
+    # Via ferrata first -- this is the one that gets people killed.
+    # Group by way id so a single ferrata does not produce dozens of nearly
+    # identical lines: on a Zugspitze route that was 36 segments.
+    if ferrata:
+        by_way = {}
+        for lat, lon, scale, osm_id in ferrata:
+            key = osm_id or ('%.3f,%.3f' % (lat, lon))
+            if key not in by_way:
+                by_way[key] = (lat, lon, scale, osm_id, 0)
+            prev = by_way[key]
+            by_way[key] = (prev[0], prev[1], prev[2], prev[3], prev[4] + 1)
+
+        for lat, lon, scale, osm_id, count in list(by_way.values())[:5]:
+            source = (' https://www.openstreetmap.org/way/%s' % osm_id) if osm_id else ''
+            grade = ('via_ferrata_scale=%s' % scale) if scale != 'ladder' else 'fixed ladders'
+            warnings.append(
+                'VIA FERRATA near %.5f,%.5f (%s, %d segment%s). Requires a '
+                'harness, a via ferrata set and the skills to use them.%s'
+                % (lat, lon, grade, count, '' if count == 1 else 's', source))
+        if len(by_way) > 5:
+            warnings.append(
+                '... and %d more via ferrata / ladder sections on this route'
+                % (len(by_way) - 5))
+
+    if sac_hits:
+        hardest = max(sac_hits, key=lambda k: _SAC_SCALE_RANK[k])
+        lat, lon, osm_id = sac_hits[hardest]
+        grades = ', '.join(
+            '%s (%s)' % (_SAC_SCALE_LABEL[k], k)
+            for k in sorted(sac_hits, key=lambda k: _SAC_SCALE_RANK[k]))
+        source = (' https://www.openstreetmap.org/way/%s' % osm_id) if osm_id else ''
+        warnings.append(
+            'hardest section on this route is %s = %s near %.5f,%.5f; '
+            'grades along the way: %s%s'
+            % (_SAC_SCALE_LABEL[hardest], hardest, lat, lon, grades, source))
+
+    for lat, lon, vis in poor_visibility[:3]:
+        warnings.append(
+            'trail_visibility=%s near %.5f,%.5f -- the path may be hard or '
+            'impossible to follow on the ground' % (vis, lat, lon))
+
+    for lat, lon, scale in steep[:5]:
+        warnings.append(
+            'mtb_scale=%d tagged near %.5f,%.5f -- expert MTB terrain, on foot '
+            'usually steep and rocky' % (scale, lat, lon))
+
+    stats = {}
+    if surfaces:
+        stats['surface_segments'] = surfaces
+    if steep:
+        stats['mtb_scale_alerts'] = len(steep)
+    if sac_hits:
+        stats['sac_scale'] = {
+            _SAC_SCALE_LABEL[k]: k for k in sorted(sac_hits, key=lambda k: _SAC_SCALE_RANK[k])
+        }
+        stats['max_sac_scale'] = _SAC_SCALE_LABEL[
+            max(sac_hits, key=lambda k: _SAC_SCALE_RANK[k])]
+    if ferrata:
+        stats['via_ferrata_sections'] = len(ferrata)
+    return warnings, stats
 
 
 def _nearest_node(graph, lon, lat, candidates=None):
@@ -1236,6 +1640,12 @@ def simple_mbtiles_server(
     # Decoded-tile caches. Routing and elevation both re-read the same tiles
     # over and over while an agent iterates on a tour, and MVT decoding in
     # pure Python is by far the most expensive part of a request.
+    # Whether the loaded tiles actually carry difficulty data. Stock
+    # OpenMapTiles drops sac_scale, so this stays False there and the agent
+    # must not read "no warning" as "easy".
+    tile_data_features = {'sac_scale': False, 'via_ferrata_scale': False,
+                          'trail_visibility': False, 'smoothness': False}
+
     road_cache = LruCache(tile_cache_size)
     contour_cache = LruCache(max(1, tile_cache_size // 4))
     poi_cache = LruCache(max(1, tile_cache_size // 4))
@@ -1567,6 +1977,7 @@ def simple_mbtiles_server(
         """
         db_connection = mbtiles_dict[(identifier, version)]['db_connection']
         segments = []
+        named_ways = []
         hits = misses = 0
         for (z, x, y) in tiles:
             key = (identifier, version, z, x, y)
@@ -1574,12 +1985,18 @@ def simple_mbtiles_server(
             if cached is None:
                 misses += 1
                 blob = _load_tile_blob(db_connection, z, x, y)
-                cached = _extract_road_segments(blob, x, y, z) if blob else []
+                cached = _extract_road_segments(blob, x, y, z) if blob else ([], [])
                 road_cache.put(key, cached)
             else:
                 hits += 1
-            segments.extend(cached)
-        return segments, hits, misses
+            segments.extend(cached[0])
+            named_ways.extend(cached[1])
+        for segment in segments:
+            hints = segment[4] if len(segment) > 4 else ()
+            for key, _value in hints:
+                if key in tile_data_features:
+                    tile_data_features[key] = True
+        return segments, named_ways, hits, misses
 
     def _contour_lines_for_tiles(tiles):
         """Decoded contour lines for a list of (z, x, y) tiles."""
@@ -1609,7 +2026,8 @@ def simple_mbtiles_server(
     # ------------------------------------------------------------------
 
     def compute_route(identifier, version, from_lat, from_lon, to_lat, to_lon,
-                      profile='foot', buffer_km=None, with_elevation=False):
+                      profile='foot', buffer_km=None, with_elevation=False,
+                      max_sac_scale=None, allow_via_ferrata=True):
         """
         Route one segment from (from_lat, from_lon) to (to_lat, to_lon).
 
@@ -1619,6 +2037,11 @@ def simple_mbtiles_server(
         """
         if profile not in _ROUTING_PROFILES:
             raise RoutingError('unknown profile "%s"; use foot or bike' % profile, 400)
+
+        if max_sac_scale and max_sac_scale not in _SAC_SCALE_RANK:
+            raise RoutingError(
+                'unknown max_sac_scale "%s"; use one of: %s'
+                % (max_sac_scale, ', '.join(_SAC_SCALE_ORDER)), 400)
 
         if (identifier, version) not in mbtiles_dict:
             raise RoutingError('unknown tileset %s@%s' % (identifier, version), 404)
@@ -1644,14 +2067,22 @@ def simple_mbtiles_server(
                 'corridor too large (%d tiles, limit %d); reduce the buffer or '
                 'insert a waypoint' % (len(tiles), route_max_tiles), 400)
 
-        all_segments, hits, misses = _road_segments_for_tiles(identifier, version, tiles)
+        all_segments, named_ways, hits, misses = _road_segments_for_tiles(
+            identifier, version, tiles)
 
         if not all_segments:
             raise RoutingError('no road network found in area', 404)
 
-        graph = _build_graph(all_segments, profile)
+        graph, edge_hints = _build_graph(
+            all_segments, profile, max_sac_scale, allow_via_ferrata)
         if not graph:
-            raise RoutingError('no way passable for profile "%s" in area' % profile, 404)
+            limit_note = ''
+            if max_sac_scale or not allow_via_ferrata:
+                limit_note = (' with the requested difficulty limit '
+                              '(max_sac_scale=%s, allow_via_ferrata=%s)'
+                              % (max_sac_scale, allow_via_ferrata))
+            raise RoutingError(
+                'no way passable for profile "%s"%s in area' % (profile, limit_note), 404)
 
         # Snap both ends onto the *same* connected component. Tiles are
         # clipped at their borders, so the decoded network contains hundreds
@@ -1691,6 +2122,32 @@ def simple_mbtiles_server(
             'snap_start_m': round(start_snap_km * 1000, 1),
             'snap_end_m': round(end_snap_km * 1000, 1),
         }
+
+        terrain_warnings, terrain_stats = _terrain_warnings(path_coords, edge_hints)
+        terrain_warnings.extend(_named_way_warnings(
+            path_coords, named_ways,
+            tagged_indices=_difficulty_tagged_indices(path_coords, edge_hints)))
+        if terrain_warnings:
+            properties['terrain_warnings'] = terrain_warnings
+        properties.update(terrain_stats)
+        if max_sac_scale:
+            properties['max_sac_scale_requested'] = max_sac_scale
+        if not allow_via_ferrata:
+            properties['via_ferrata_excluded'] = True
+            # Excluding ferratas says nothing about the walking difficulty:
+            # the two tags are independent, and a Zugspitze test still routed
+            # over T6 terrain with ferratas switched off.
+            if not max_sac_scale:
+                hardest = terrain_stats.get('max_sac_scale')
+                if hardest and int(hardest.lstrip('T')) >= 4:
+                    properties.setdefault('terrain_warnings', []).append(
+                        'via ferratas were excluded, but this route still '
+                        'contains %s terrain -- set max_sac_scale as well if '
+                        'that is too hard' % hardest)
+        if 'sac_scale' not in terrain_stats:
+            properties['sac_scale_data'] = (
+                'no sac_scale tagged on this route -- difficulty unknown, '
+                'not necessarily easy')
 
         ascent = descent = None
         if with_elevation and contours_dict:
@@ -1801,6 +2258,9 @@ def simple_mbtiles_server(
 
         profile = request.args.get('profile', 'foot')
         with_elevation = request.args.get('elevation', '').lower() in ('1', 'true', 'yes')
+        max_sac_scale = request.args.get('max_sac_scale') or None
+        allow_via_ferrata = request.args.get(
+            'allow_via_ferrata', 'true').lower() not in ('0', 'false', 'no')
 
         try:
             buffer_km = request.args.get('buffer_km')
@@ -1810,7 +2270,8 @@ def simple_mbtiles_server(
 
         try:
             feature = compute_route(identifier, version, from_lat, from_lon,
-                                    to_lat, to_lon, profile, buffer_km, with_elevation)
+                                    to_lat, to_lon, profile, buffer_km, with_elevation,
+                                    max_sac_scale, allow_via_ferrata)
         except RoutingError as exc:
             return _json({'error': exc.message}, exc.status)
 
@@ -1882,6 +2343,8 @@ def simple_mbtiles_server(
             'gpx':      True,
             'geocoding': bool(photon_url),
             'mcp_tools': mcp_server.tool_names(),
+            'difficulty_data': dict(tile_data_features),
+            'sac_scale_values': list(_SAC_SCALE_ORDER),
             'routing_limits': {
                 'max_tiles': route_max_tiles,
                 'max_crow_km': route_max_crow_km,
@@ -1901,12 +2364,23 @@ def simple_mbtiles_server(
     default_tiles = (mbtiles[0]['IDENTIFIER'], mbtiles[0]['VERSION']) if mbtiles else (None, None)
 
     _SAFETY_NOTE = (
-        'Data source is OpenMapTiles vector tiles, which do NOT contain '
-        'sac_scale, trail_visibility, via_ferrata_scale, ele or surface. '
-        'Difficulty of a path is therefore UNKNOWN -- a T1 stroll and a T5 '
-        'scramble look identical here. Never present a route as safe or '
-        'beginner friendly, and tell the user to cross-check the track '
-        'against a topographic map before walking it.'
+        'Difficulty data (sac_scale, trail_visibility, via_ferrata_scale) is '
+        'available WHERE OSM CONTRIBUTORS TAGGED IT, and is reported in '
+        'terrain_warnings plus max_sac_scale. Use max_sac_scale to exclude '
+        'terrain above a grade and allow_via_ferrata=false to keep cabled '
+        'climbing routes out -- do that whenever the user did not explicitly '
+        'ask for a via ferrata. '
+        'CRITICAL LIMITATION: untagged ways are NEVER excluded, because most '
+        'of the world carries no sac_scale and a strict filter would just '
+        'produce empty results. An untagged path can be anything -- via '
+        'ferratas appear in the data as ordinary paths (a Zugspitze route runs '
+        'over "Stopselzieher", a cabled climbing route). So a missing warning '
+        'means MISSING DATA, not easy terrain. Seasonal closures, wildlife '
+        'sanctuaries and access=private are not in the tiles at all. '
+        'Never present a route as safe or beginner friendly, always pass '
+        'terrain_warnings on verbatim, and always tell the user to cross-check '
+        'the track against a topographic map (e.g. an Alpine Club map) before '
+        'walking it.'
     )
 
     def _tiles_from_args(args):
@@ -2067,6 +2541,11 @@ def simple_mbtiles_server(
 
         buffer_km = args.get('buffer_km')
         buffer_km = float(buffer_km) if buffer_km else None
+        max_sac_scale = args.get('max_sac_scale') or None
+        if max_sac_scale and max_sac_scale not in _SAC_SCALE_RANK:
+            raise ToolError('unknown max_sac_scale "%s"; use one of: %s'
+                            % (max_sac_scale, ', '.join(_SAC_SCALE_ORDER)))
+        allow_via_ferrata = bool(args.get('allow_via_ferrata', True))
         identifier, version = _tiles_from_args(args)
         want_elevation = bool(args.get('elevation', True)) and bool(contours_dict)
         want_gpx = bool(args.get('export_gpx', True))
@@ -2075,6 +2554,8 @@ def simple_mbtiles_server(
         coords = []
         segments = []
         errors = []
+        terrain_notes = []
+        sac_seen = set()
         total_km = 0.0
         cache_hits = cache_misses = 0
         tiles_loaded = 0
@@ -2084,7 +2565,8 @@ def simple_mbtiles_server(
             (to_lat, to_lon) = waypoints[i + 1]
             try:
                 feature = compute_route(identifier, version, from_lat, from_lon,
-                                        to_lat, to_lon, profile, buffer_km, False)
+                                        to_lat, to_lon, profile, buffer_km, False,
+                                        max_sac_scale, allow_via_ferrata)
             except RoutingError as exc:
                 errors.append('segment %d (%.5f,%.5f -> %.5f,%.5f): %s'
                               % (i + 1, from_lat, from_lon, to_lat, to_lon, exc.message))
@@ -2099,6 +2581,11 @@ def simple_mbtiles_server(
                 continue
 
             props = feature['properties']
+            for warning in props.get('terrain_warnings', ()):
+                if warning not in terrain_notes:
+                    terrain_notes.append(warning)
+            if props.get('max_sac_scale'):
+                sac_seen.add(props['max_sac_scale'])
             seg_coords = feature['geometry']['coordinates']
             total_km += props['distance_km']
             tiles_loaded += props['tiles_loaded']
@@ -2142,6 +2629,19 @@ def simple_mbtiles_server(
             'cache_misses': cache_misses,
             'warnings': [_SAFETY_NOTE],
         }
+        if terrain_notes:
+            result['terrain_warnings'] = terrain_notes
+        if sac_seen:
+            result['max_sac_scale'] = max(
+                sac_seen, key=lambda label: int(label.lstrip('T')))
+        else:
+            result['sac_scale_data'] = (
+                'no sac_scale tagged along this route -- difficulty is unknown, '
+                'which does NOT mean easy')
+        if max_sac_scale:
+            result['max_sac_scale_requested'] = max_sac_scale
+        if not allow_via_ferrata:
+            result['via_ferrata_excluded'] = True
         if ascent is not None:
             result['ascent_m'] = ascent
             result['descent_m'] = descent
@@ -2280,20 +2780,27 @@ def simple_mbtiles_server(
     mcp_server.tool(
         'search_poi',
         'Find points of interest around a coordinate, sorted by distance, '
-        'named POIs first within the same distance band. '
+        'named POIs first within the same distance band.\n'
         'Categories: ' + ', '.join(sorted(_POI_CATEGORY_FILTERS)) + '.\n'
-        '- alpine_hut: staffed and unstaffed mountain huts for an overnight '
-        'stop.\n'
-        '- camp_site: campsites and caravan sites.\n'
-        '- shelter: roofed spots WITHOUT accommodation -- this also contains '
-        'bus stop shelters and public air-raid shelters and is mostly '
-        'unnamed, so do not offer these as a place to sleep.\n'
+        '- alpine_hut: mountain huts, wilderness huts and bivouacs -- the '
+        'category for an overnight stop.\n'
+        '- camp_site: campsites, caravan sites and individual pitches.\n'
+        '- shelter: roofed spots WITHOUT accommodation. Also contains bus stop '
+        'shelters and public air-raid shelters, mostly unnamed -- never offer '
+        'these as a place to sleep.\n'
+        '- drinking_water: taps, wells, springs and cattle troughs. Water on '
+        'long stretches; cemeteries usually have a tap. NOT a potability '
+        'guarantee -- a spring or trough is untreated water.\n'
+        '- cave: cave entrances and sinkholes (emergency shelter, caving).\n'
+        '- viewpoint: viewpoints, summits, saddles and towers.\n'
+        '- emergency: emergency phones, mountain rescue, ranger stations, '
+        'defibrillators.\n'
         '- supermarket, pharmacy, hospital, fuel, charging_station: resupply '
         'and services.\n'
         'Only POIs present in the local vector tiles at zoom 14 are found. '
-        'Opening hours, phone numbers, capacity and whether a hut is actually '
-        'staffed or open are NOT available -- tell the user to call ahead '
-        'before relying on a hut.',
+        'Opening hours, phone numbers, capacity, prices and whether a hut is '
+        'staffed or even open are NOT in the data -- look those up online and '
+        'tell the user to call ahead before relying on a hut.',
         {
             'type': 'object',
             'properties': {
@@ -2361,6 +2868,42 @@ def simple_mbtiles_server(
                     'default': True,
                     'description': 'estimate ascent/descent from contour lines '
                                    '(only if contours.mbtiles is loaded)',
+                },
+                'max_sac_scale': {
+                    'type': 'string',
+                    'enum': list(_SAC_SCALE_ORDER),
+                    'description': 'hardest SAC grade allowed on the route. '
+                                   'hiking=T1 (wide path, no head for heights '
+                                   'needed), mountain_hiking=T2 (continuous '
+                                   'path, partly steep), '
+                                   'demanding_mountain_hiking=T3 (exposed '
+                                   'sections, sure footing required), '
+                                   'alpine_hiking=T4 (trackless sections, '
+                                   'hands occasionally needed), '
+                                   'demanding_alpine_hiking=T5 (exposed '
+                                   'scrambling), difficult_alpine_hiking=T6 '
+                                   '(climbing). Ways tagged ABOVE the limit are '
+                                   'excluded from routing; untagged ways are '
+                                   'never excluded, so this is a filter, not a '
+                                   'guarantee. Suggested defaults: T2 for '
+                                   '"easy hike", T3 for an experienced hiker, '
+                                   'T4+ only when asked for.',
+                },
+                'allow_via_ferrata': {
+                    'type': 'boolean',
+                    'default': True,
+                    'description': 'set false to exclude ways tagged as via '
+                                   'ferrata or with fixed ladders. Set this '
+                                   'whenever the user did not explicitly ask '
+                                   'for a via ferrata. IMPORTANT: this is an '
+                                   'independent axis from max_sac_scale -- a '
+                                   'way can be T6 scrambling without any '
+                                   'ferrata tag, and a cabled route can be '
+                                   'tagged T2. Excluding ferratas alone still '
+                                   'allowed a T6 route on a real Zugspitze '
+                                   'test, so for a safe tour set BOTH: '
+                                   'allow_via_ferrata=false AND a '
+                                   'max_sac_scale.',
                 },
                 'export_gpx': {'type': 'boolean', 'default': True},
                 'tileset': {'type': 'string',
