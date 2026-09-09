@@ -6,7 +6,7 @@
 
 ```
 mkdir osm
-wget --continue -O osm/planet.mbtiles https://nx93856.your-storageshare.de/public.php/dav/files/apP4zEacCwqPfWd/planet.mbtiles
+wget --continue -O osm/planet.mbtiles https://osm.osuv.de/planet.mbtiles
 wget --continue -O osm/contours.mbtiles https://nx93856.your-storageshare.de/public.php/dav/files/apP4zEacCwqPfWd/contours_90m-Z11-Z13_30m-Z14.mbtiles
 podman run -ti --rm -p 9000:9000 --name sms -v "$(pwd)/osm/:/data/" registry.gitlab.com/markuman/sms:latest
 firefox http://localhost:9000
