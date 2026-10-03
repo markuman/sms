@@ -5,6 +5,7 @@ Kept dependency free on purpose: the whole point of sms is "one container,
 no extras".
 """
 
+import math
 import os
 import re
 import time
@@ -46,6 +47,8 @@ def _point(element):
     if ele is not None:
         try:
             ele = float(ele)
+            if not math.isfinite(ele):
+                ele = None
         except ValueError:
             ele = None
     return lon, lat, ele
