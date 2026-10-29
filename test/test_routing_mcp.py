@@ -1436,6 +1436,18 @@ def test_parse_gpx_rejects_garbage():
     assert len(parsed['points']) == 2
 
 
+@pytest.mark.parametrize('rte', [False, True])
+@pytest.mark.parametrize('elevation', ['NaN', 'INF', '-INF', '1e309', '-1e309'])
+def test_parse_gpx_ignores_nonfinite_elevation(rte, elevation):
+    pts = [(48.1, 11.5), (48.11, 11.51), (48.12, 11.52)]
+    doc = _gpx_doc(pts, rte=rte, ele=[0, 500, -20])
+    doc = doc.replace('<ele>500.0</ele>', '<ele>%s</ele>' % elevation)
+    parsed = parse_gpx(doc)
+    assert parsed['points'] == [[11.5, 48.1, 0.0], [11.51, 48.11, None],
+                                [11.52, 48.12, -20.0]]
+    assert gpx_ascent_descent([p[2] for p in parsed['points']]) == (0, 20)
+
+
 def test_gpx_ascent_descent_hysteresis():
     # clean climb, descent, climb
     assert gpx_ascent_descent([100, 200, 150, 250]) == (200, 50)
@@ -1627,6 +1639,52 @@ def test_analyze_gpx_prefers_gpx_elevation(server):
     bare = _upload(_gpx_doc(pts))
     body, is_error = call_tool('analyze_gpx', {'gpx_id': bare, 'elevation_source': 'gpx'})
     assert is_error and '<ele>' in body['error']
+
+
+@pytest.mark.parametrize('elevation', ['NaN', 'INF', '-INF', '1e309', '-1e309'])
+def test_analyze_gpx_ignores_invalid_elevation(server, elevation):
+    pts = _grid_track(48.15, 11.52, 11.54)
+    doc = _gpx_doc(pts, ele=[500] * len(pts))
+    doc = doc.replace('<ele>500.0</ele>', '<ele>%s</ele>' % elevation)
+    resp = httpx.post(BASE + '/v1/gpx', content=doc.encode(), timeout=30.0)
+    assert resp.status_code == 201, resp.text
+    uploaded = resp.json()
+    assert uploaded['points'] == len(pts)
+    assert uploaded['has_elevation'] is False
+    assert httpx.get(uploaded['gpx_url'], timeout=30.0).content == doc.encode()
+    gpx_id = uploaded['gpx_id']
+
+    resp = httpx.get(BASE + '/v1/gpx/%s/analysis' % gpx_id, timeout=30.0)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()['elevation_source'] == 'contours'
+    body, is_error = call_tool('analyze_gpx', {'gpx_id': gpx_id})
+    assert not is_error, body
+    assert body['elevation_source'] == 'contours'
+
+    resp = httpx.get(BASE + '/v1/gpx/%s/analysis' % gpx_id,
+                     params={'elevation_source': 'gpx'}, timeout=30.0)
+    assert resp.status_code == 400, resp.text
+    assert '0 %' in resp.json()['error']
+    body, is_error = call_tool('analyze_gpx', {'gpx_id': gpx_id,
+                                            'elevation_source': 'gpx'})
+    assert is_error and '0 %' in body['error']
+
+
+def test_analyze_gpx_keeps_finite_elevation(server):
+    pts = _grid_track(48.15, 11.52, 11.54)
+    elevations = [-50 + 5 * i for i in range(len(pts))]
+    doc = _gpx_doc(pts, ele=elevations)
+    doc = doc.replace('<ele>50.0</ele>', '<ele>INF</ele>')
+    gpx_id = _upload(doc)
+
+    resp = httpx.get(BASE + '/v1/gpx/%s/analysis' % gpx_id, timeout=30.0)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body['elevation_source'] == 'gpx'
+    assert body['min_ele_m'] == -50
+    assert body['max_ele_m'] == elevations[-1]
+    assert body['ascent_m'] == elevations[-1] + 50
+    assert body['descent_m'] == 0
 
 
 def test_analyze_gpx_poi_options(server):
